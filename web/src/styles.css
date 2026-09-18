@@ -1,0 +1,164 @@
+:root {
+  --page-dark: #0b0c0e;
+  --page-light: #f7f7f6;
+  --surface-dark: #14161a;
+  --surface-light: #ffffff;
+  --hairline-dark: rgba(255, 255, 255, 0.08);
+  --hairline-light: rgba(11, 12, 14, 0.09);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overscroll-behavior-y: none;
+}
+
+[data-mantine-color-scheme="dark"] body {
+  background: var(--page-dark);
+}
+[data-mantine-color-scheme="light"] body {
+  background: var(--page-light);
+}
+
+/* A faint warm bloom behind the page: the only decorative use of the heat hues,
+   far below any colour the scale actually uses. */
+.gh-page::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+[data-mantine-color-scheme="dark"] .gh-page::before {
+  background:
+    radial-gradient(60rem 30rem at 80% -8%, rgba(220, 116, 48, 0.09), transparent 65%),
+    radial-gradient(48rem 26rem at 8% -4%, rgba(65, 51, 90, 0.16), transparent 60%);
+}
+[data-mantine-color-scheme="light"] .gh-page::before {
+  background:
+    radial-gradient(60rem 30rem at 80% -8%, rgba(171, 64, 73, 0.05), transparent 65%),
+    radial-gradient(48rem 26rem at 8% -4%, rgba(120, 110, 160, 0.06), transparent 60%);
+}
+
+.gh-page > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Treemap ------------------------------------------------------------- */
+
+.gh-treemap {
+  display: block;
+  width: 100%;
+  touch-action: manipulation;
+}
+
+.gh-tile {
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+.gh-tile:hover {
+  opacity: 0.86;
+}
+.gh-tile:focus-visible {
+  outline: none;
+}
+
+.gh-tile-label {
+  pointer-events: none;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.gh-dir-label {
+  pointer-events: none;
+  user-select: none;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+/* Code view ----------------------------------------------------------- */
+
+.gh-code {
+  font-variant-ligatures: none;
+  tab-size: 4;
+}
+
+.gh-code-row {
+  display: grid;
+  grid-template-columns: var(--gutter) 4px 1fr;
+  align-items: stretch;
+  cursor: default;
+}
+
+.gh-code-row:hover .gh-code-text {
+  filter: brightness(1.35);
+}
+[data-mantine-color-scheme="light"] .gh-code-row:hover .gh-code-text {
+  filter: brightness(0.97);
+}
+
+.gh-code-num {
+  text-align: right;
+  padding-right: 10px;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.45;
+}
+
+.gh-code-text {
+  padding-left: 12px;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+/* Scrollbars ---------------------------------------------------------- */
+
+.gh-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.gh-scroll::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 140, 0.35);
+  border-radius: 8px;
+}
+.gh-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.gh-area-row:hover {
+  background: light-dark(rgba(11, 12, 14, 0.045), rgba(255, 255, 255, 0.05));
+}
+.gh-area-row:focus-visible {
+  outline: 2px solid light-dark(#4a505e, #9aa1b0);
+  outline-offset: 1px;
+}
+
+/* The header mark: four tiles of the ramp, coldest to hottest. */
+[data-mantine-color-scheme="dark"] {
+  --gh-mark-0: #ffe08a;
+  --gh-mark-1: #dc7430;
+  --gh-mark-2: #7d3a60;
+  --gh-mark-3: #2d3048;
+}
+[data-mantine-color-scheme="light"] {
+  --gh-mark-0: #7a2418;
+  --gh-mark-1: #b1506a;
+  --gh-mark-2: #a795bb;
+  --gh-mark-3: #dcdfe9;
+}

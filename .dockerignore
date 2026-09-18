@@ -1,0 +1,14 @@
+# Everything the build does not need. Keeps the context small and stops a local
+# node_modules or dist from shadowing what the build stages produce.
+.git
+.github
+web/node_modules
+web/dist
+web/*.tsbuildinfo
+docs
+quanticode
+quanticode-server
+coverage.out
+*.md
+!README.md
+.DS_Store

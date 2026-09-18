@@ -1,0 +1,15 @@
+# Build output
+/quanticode
+/quanticode-server
+/web/dist
+/web/node_modules
+*.tsbuildinfo
+
+# Go
+coverage.out
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

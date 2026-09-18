@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # Called by the release workflow, so a release runs exactly these checks.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: go.mod
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      # The tests shell out to real git, so give it an identity it can commit with.
+      - name: Configure git for tests
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.com"
+          git config --global init.defaultBranch main
+
+      - name: Test
+        run: go test ./... -race -count=1 -coverprofile=coverage.out
+
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -n 20 >> "$GITHUB_STEP_SUMMARY"
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Includes the gate on the heat ramps: monotonic lightness, hot-end
+      # contrast and lightness span, in both colour schemes.
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  docker:
+    name: Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Single-arch and loaded locally: this job proves the image builds and
+      # runs. The release workflow is what publishes multi-arch.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: quanticode:ci
+          build-args: |
+            VERSION=ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Serve this checkout from the image, mounted read-only and owned by a
+      # different uid than the container user — the case that breaks first.
+      - name: Smoke-test
+        run: |
+          set -euo pipefail
+          test "$(docker run --rm quanticode:ci -version)" = "ci"
+
+          docker run -d --name smoke -p 8090:8090 \
+            -v "$PWD:/repo:ro" quanticode:ci -repo self=/repo
+          for _ in $(seq 1 60); do
+            if curl -sf localhost:8090/healthz >/dev/null; then break; fi
+            sleep 2
+          done
+
+          curl -sf localhost:8090/healthz | grep -q ok
+          curl -sf localhost:8090/ | grep -q quanticode
+          files="$(curl -sf localhost:8090/api/repo | jq '.meta.totalFiles')"
+          echo "analysed $files files from the image"
+          test "$files" -gt 0
+
+      - name: Container logs on failure
+        if: failure()
+        run: docker logs smoke || true
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f smoke || true
