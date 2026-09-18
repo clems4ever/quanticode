@@ -20,11 +20,16 @@ in; click a file to open it.
 
 **The ranking** puts the same children of the folder in view in a strict
 hottest-to-coldest order, so the question can also be answered by reading top to
-bottom rather than by hunting for colour. Folders rank ahead of loose files.
+bottom rather than by hunting for colour. Folders rank ahead of loose files. Each
+row names the commit behind its most recent change — the same thing the map's
+hover card shows, repeated here because a touch screen has no hover.
 
-**The file view** shows one file line by line, each row carrying the heat of the
-commit that last touched it, with a whole-file minimap and the commit behind the
-line under the cursor.
+**The file view** shows one file line by line, syntax highlighted, each row
+carrying the heat of the commit that last touched it. The commit behind the line
+under the cursor — or under a tap — is named at the foot of the pane with a link
+out to it. The whole-file heat strip down the right edge doubles as the vertical
+scrollbar: it shows where the viewport is, and clicking or dragging it moves
+there.
 
 **The timeline** is commit activity over a window — 30 days, 90 days, a year or
 the whole history — with each bar at its own position on the same heat scale.

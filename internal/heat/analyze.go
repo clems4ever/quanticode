@@ -176,6 +176,7 @@ func (a *Analyzer) blameOne(f string, text map[string]bool) (blameResult, bool) 
 	seenCommits := map[string]bool{}
 	var last, first int64
 	first = 1<<63 - 1
+	lastSHA := ""
 
 	for _, sha := range shas {
 		c := commits[sha]
@@ -185,7 +186,7 @@ func (a *Analyzer) blameOne(f string, text map[string]bool) (blameResult, bool) 
 		authorCount[c.Author]++
 		seenCommits[sha] = true
 		if c.Time > last {
-			last = c.Time
+			last, lastSHA = c.Time, c.Short
 		}
 		if c.Time < first {
 			first = c.Time
@@ -207,16 +208,17 @@ func (a *Analyzer) blameOne(f string, text map[string]bool) (blameResult, bool) 
 
 	return blameResult{
 		file: FileHeat{
-			Path:      f,
-			Lines:     len(shas),
-			Ext:       gitrepo.Ext(f),
-			Buckets:   buckets,
-			LastEdit:  last,
-			FirstEdit: first,
-			Commits:   len(seenCommits),
-			TopAuthor: top,
-			Authors:   len(authorCount),
-			Generated: gitrepo.IsGenerated(f, len(shas)),
+			Path:       f,
+			Lines:      len(shas),
+			Ext:        gitrepo.Ext(f),
+			Buckets:    buckets,
+			LastEdit:   last,
+			LastCommit: lastSHA,
+			FirstEdit:  first,
+			Commits:    len(seenCommits),
+			TopAuthor:  top,
+			Authors:    len(authorCount),
+			Generated:  gitrepo.IsGenerated(f, len(shas)),
 		},
 		commits: commits,
 		authors: authors,

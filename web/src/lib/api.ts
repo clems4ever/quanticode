@@ -16,6 +16,7 @@ export interface FileHeat {
   x: string;   // extension
   k: Bucket[]; // [lastEditTime, lineCount][]
   le: number;  // last edit
+  lc?: string; // short sha of the commit behind that last edit
   fe: number;  // first edit
   nc: number;  // distinct commits
   ta: string;  // top author

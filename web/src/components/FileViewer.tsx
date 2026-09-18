@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionIcon, Badge, Box, Group, Loader, Paper, ScrollArea, Stack, Text, Tooltip,
 } from "@mantine/core";
-import { IconX, IconGitCommit } from "@tabler/icons-react";
+import { IconX, IconGitCommit, IconExternalLink } from "@tabler/icons-react";
 import { fetchFile, type FilePayload } from "../lib/api";
+import { highlight, type Highlighted, type HighlightedLine } from "../lib/highlight";
 import {
   formatNumber, heatAt, heatColor, heatRGBA, relativeTime, type HeatMetric,
 } from "../lib/heat";
@@ -11,6 +12,23 @@ import HeatLegend from "./HeatLegend";
 
 const ROW_H = 19;
 const OVERSCAN = 30;
+
+/**
+ * One line of code, coloured if a grammar produced tokens for it.
+ *
+ * Falls back to the raw text whenever highlighting is absent — no grammar, a
+ * file too large, a download still in flight — so the view never waits on it.
+ */
+function renderCode(text: string, tokens: HighlightedLine | undefined) {
+  // A non-breaking space, so a blank line still occupies a full row.
+  if (text === "") return "\u00a0";
+  if (!tokens || tokens.length === 0) return text;
+  return tokens.map((t, i) => (
+    <span key={i} style={{ color: t.color }}>
+      {t.content}
+    </span>
+  ));
+}
 
 interface Props {
   path: string;
@@ -22,6 +40,8 @@ interface Props {
   metric: HeatMetric;
   onClose: () => void;
   isMobile: boolean;
+  /** Repository page on its forge, for linking a commit out. */
+  webUrl?: string | null;
 }
 
 /**
@@ -33,13 +53,16 @@ interface Props {
  * competing with the text for legibility.
  */
 export default function FileViewer({
-  path, src, scheme, now, halfLifeDays, onClose, isMobile,
+  path, src, scheme, now, halfLifeDays, onClose, isMobile, webUrl,
 }: Props) {
   const [data, setData] = useState<FilePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<number | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewH, setViewH] = useState(600);
+  // Keyed by what it was produced for, so a stale result from a previous file
+  // or colour scheme is ignored during render rather than cleared by an effect.
+  const [syntaxFor, setSyntaxFor] = useState<{ key: string; value: Highlighted | null } | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const minimapRef = useRef<HTMLCanvasElement>(null);
 
@@ -54,6 +77,23 @@ export default function FileViewer({
       cancelled = true;
     };
   }, [path, src]);
+
+  // Highlighting is loaded after the file, and the file renders without waiting
+  // for it: blame is what this view is for, and colour arriving a moment later
+  // is better than a blank pane while a grammar downloads.
+  const syntaxKey = `${path}|${scheme}`;
+  const syntax = syntaxFor?.key === syntaxKey ? syntaxFor.value : null;
+
+  useEffect(() => {
+    if (!data) return;
+    let cancelled = false;
+    highlight(path, data.lines.map((l) => l.t), scheme)
+      .then((h) => !cancelled && setSyntaxFor({ key: `${path}|${scheme}`, value: h }))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [data, path, scheme]);
 
   useEffect(() => {
     const el = viewportRef.current;
@@ -101,6 +141,13 @@ export default function FileViewer({
 
   const activeCommit = active !== null && data ? data.commits[data.lines[active].c] : null;
 
+  /** Move the viewport so the fraction of the file under y sits in the middle. */
+  const scrubTo = (clientY: number, strip: HTMLElement) => {
+    const r = strip.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (clientY - r.top) / r.height));
+    viewportRef.current?.scrollTo({ top: frac * total * ROW_H - viewH / 2 });
+  };
+
   const header = (
     <Box p={{ base: "sm", sm: "md" }} pb="xs" style={{ flexShrink: 0 }}>
       <Group justify="space-between" wrap="nowrap" align="flex-start" gap="sm">
@@ -125,7 +172,7 @@ export default function FileViewer({
             {Object.keys(data.commits).length} commits
           </Badge>
           <Badge variant="default" size="sm" radius="sm" fw={550}>
-            {data.ext}
+            {syntax?.lang ?? data.ext}
           </Badge>
         </Group>
       )}
@@ -171,7 +218,13 @@ export default function FileViewer({
           type="auto"
           scrollbarSize={10}
           style={{ flex: 1, minWidth: 0 }}
-          className="gh-scroll"
+          // On desktop the heat strip beside this *is* the vertical scrollbar —
+          // it shows the viewport, jumps on click and scrubs on drag — so the
+          // second bar is hidden in CSS. It must be hidden in CSS and not with
+          // Mantine's `scrollbars` prop: that prop sets overflow-y to hidden,
+          // which does not hide a scrollbar so much as stop the pane scrolling
+          // at all. On mobile there is no strip, so the bar stays.
+          className={isMobile ? "gh-scroll" : "gh-scroll gh-code-scroll"}
         >
           <Box
             className="gh-code"
@@ -203,7 +256,7 @@ export default function FileViewer({
                     </Box>
                     <Box style={{ background: heatColor(h, scheme) }} />
                     <Box component="span" className="gh-code-text">
-                      {line.t === "" ? " " : line.t}
+                      {renderCode(line.t, syntax?.lines[i])}
                     </Box>
                   </Box>
                 );
@@ -213,14 +266,26 @@ export default function FileViewer({
         </ScrollArea>
 
         {!isMobile && (
-          <Tooltip label="Whole-file heat — click to jump" position="left">
+          <Tooltip label="Whole-file heat — click or drag to move" position="left">
             <Box
-              w={14}
-              style={{ flexShrink: 0, cursor: "pointer", position: "relative" }}
-              onClick={(e) => {
-                const r = e.currentTarget.getBoundingClientRect();
-                const frac = (e.clientY - r.top) / r.height;
-                viewportRef.current?.scrollTo({ top: frac * total * ROW_H - viewH / 2 });
+              w={16}
+              className="gh-code-minimap"
+              style={{
+                flexShrink: 0,
+                cursor: "pointer",
+                position: "relative",
+                touchAction: "none",
+              }}
+              onPointerDown={(e) => {
+                // Capture so a drag keeps scrubbing after the pointer leaves
+                // the strip, which is what a scrollbar does.
+                e.currentTarget.setPointerCapture(e.pointerId);
+                scrubTo(e.clientY, e.currentTarget);
+              }}
+              onPointerMove={(e) => {
+                if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                  scrubTo(e.clientY, e.currentTarget);
+                }
               }}
             >
               <canvas ref={minimapRef} style={{ width: "100%", height: "100%", display: "block" }} />
@@ -268,6 +333,23 @@ export default function FileViewer({
                 </Text>
               </Text>
             </Box>
+            {webUrl && (
+              <Tooltip label="Open this commit on GitHub" position="top-end">
+                <ActionIcon
+                  component="a"
+                  href={`${webUrl}/commit/${activeCommit.sha}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  variant="subtle"
+                  color="gray"
+                  size="sm"
+                  aria-label="Open this commit on GitHub"
+                  style={{ flexShrink: 0 }}
+                >
+                  <IconExternalLink size={14} />
+                </ActionIcon>
+              </Tooltip>
+            )}
           </Group>
         ) : (
           <Group gap={7} c="dimmed">

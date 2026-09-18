@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { Box, Group, ScrollArea, Stack, Text, UnstyledButton } from "@mantine/core";
 import { IconFolder, IconFile } from "@tabler/icons-react";
+import type { Commit } from "../lib/api";
+import { commitOf } from "../lib/commits";
 import type { TreeNode } from "../lib/tree";
 import { formatCompact, heatColor, relativeTime } from "../lib/heat";
 
@@ -11,6 +13,8 @@ interface Props {
   maxHeight: number;
   onZoom: (path: string) => void;
   onOpenFile: (path: string) => void;
+  /** Every commit in the repository, so a row can name the one behind it. */
+  commits: Record<string, Commit>;
 }
 
 /**
@@ -23,7 +27,9 @@ interface Props {
  * Folders rank ahead of loose files: "area" is a question about folders, and a
  * single hot 40-line file at the root would otherwise head the list.
  */
-export default function AreaRanking({ node, scheme, now, maxHeight, onZoom, onOpenFile }: Props) {
+export default function AreaRanking({
+  node, scheme, now, maxHeight, onZoom, onOpenFile, commits,
+}: Props) {
   // Heat underflows to exactly 0 once a line is many half-lives old, so the
   // cold end of a long ranking would otherwise be in arbitrary order.
   const byHeat = (a: TreeNode, b: TreeNode) => b.heat - a.heat || b.lastEdit - a.lastEdit;
@@ -44,11 +50,11 @@ export default function AreaRanking({ node, scheme, now, maxHeight, onZoom, onOp
       <Stack gap={2} pr={6}>
         {split && <SectionLabel>Folders</SectionLabel>}
         {dirs.map((c) => (
-          <Row key={c.path} node={c} scheme={scheme} now={now} onZoom={onZoom} onOpenFile={onOpenFile} />
+          <Row key={c.path} node={c} scheme={scheme} now={now} onZoom={onZoom} onOpenFile={onOpenFile} commits={commits} />
         ))}
         {split && <SectionLabel>Files here</SectionLabel>}
         {loose.map((c) => (
-          <Row key={c.path} node={c} scheme={scheme} now={now} onZoom={onZoom} onOpenFile={onOpenFile} />
+          <Row key={c.path} node={c} scheme={scheme} now={now} onZoom={onZoom} onOpenFile={onOpenFile} commits={commits} />
         ))}
       </Stack>
     </ScrollArea.Autosize>
@@ -64,14 +70,16 @@ function SectionLabel({ children }: { children: ReactNode }) {
 }
 
 function Row({
-  node, scheme, now, onZoom, onOpenFile,
+  node, scheme, now, onZoom, onOpenFile, commits,
 }: {
   node: TreeNode;
   scheme: "dark" | "light";
   now: number;
   onZoom: (path: string) => void;
   onOpenFile: (path: string) => void;
+  commits: Record<string, Commit>;
 }) {
+  const commit = commitOf(node, commits);
   return (
     <UnstyledButton
       onClick={() => (node.isDir ? onZoom(node.path) : onOpenFile(node.path))}
@@ -117,6 +125,17 @@ function Row({
             {formatCompact(node.lines)} lines
             {node.isDir ? ` · ${node.fileCount} files` : ""} · {relativeTime(node.lastEdit, now)}
           </Text>
+          {/* The commit behind that last edit, on the row rather than behind a
+              hover: a touch screen has no hover, so anything only reachable
+              that way does not exist on half the devices this is read on. */}
+          {commit && (
+            <Text size="10px" c="dimmed" mt={2} truncate title={`${commit.summary} — ${commit.author}`}>
+              <Text span ff="monospace" size="10px" opacity={0.75}>
+                {commit.short}
+              </Text>{" "}
+              {commit.summary}
+            </Text>
+          )}
         </Box>
       </Group>
     </UnstyledButton>

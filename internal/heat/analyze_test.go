@@ -328,3 +328,45 @@ func TestEmptyRepositoryDoesNotPanic(t *testing.T) {
 		t.Errorf("totalLines = %d, want 0", p.Meta.TotalLines)
 	}
 }
+
+func TestFileCarriesItsLastCommit(t *testing.T) {
+	r := testrepo.New(t)
+	r.WriteLines("a.go", "package a", "// first")
+	older := r.Commit("first", "Ada", "ada@example.com", time.Now().Add(-48*time.Hour))
+
+	r.WriteLines("a.go", "package a", "// first", "// second")
+	newest := r.Commit("second", "Grace", "grace@example.com", time.Now().Add(-1*time.Hour))
+
+	a := &heat.Analyzer{Slug: "t", Name: "t", Dir: r.Dir}
+	p, err := a.Payload()
+	if err != nil {
+		t.Fatalf("Payload: %v", err)
+	}
+
+	var f *heat.FileHeat
+	for i := range p.Files {
+		if p.Files[i].Path == "a.go" {
+			f = &p.Files[i]
+		}
+	}
+	if f == nil {
+		t.Fatal("a.go missing from the analysis")
+	}
+	if f.LastCommit != newest[:8] {
+		t.Errorf("LastCommit = %q, want the newest commit %q", f.LastCommit, newest[:8])
+	}
+	if f.LastCommit == older[:8] {
+		t.Error("LastCommit points at the older commit")
+	}
+	// The short sha has to resolve in the payload's own commit map, because
+	// that is how the frontend turns it back into a commit.
+	var found bool
+	for _, c := range p.Commits {
+		if c.Short == f.LastCommit {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("LastCommit %q is not in the payload's commits", f.LastCommit)
+	}
+}

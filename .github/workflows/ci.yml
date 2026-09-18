@@ -88,6 +88,55 @@ jobs:
       - name: Build
         run: npm run build
 
+  ui:
+    name: Browser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # The tests serve this checkout and blame it, so they need its history.
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build the server
+        run: go build -o quanticode ./cmd/quanticode
+
+      - name: Build the frontend
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      # Only chromium: both projects are Chromium, one a phone viewport.
+      - name: Install the browser
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      # Drives a real browser against a real instance serving this checkout.
+      # Catches what types and unit tests cannot — a pane that renders
+      # perfectly and cannot be scrolled.
+      - name: Test
+        working-directory: web
+        run: npm run test:ui
+
+      - name: Upload traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: web/test-results/
+          retention-days: 7
+
   docker:
     name: Image
     runs-on: ubuntu-latest

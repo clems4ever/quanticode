@@ -21,18 +21,24 @@ type Bucket struct {
 // FileHeat is the per-file aggregate the treemap is drawn from. Field names are
 // short because this struct ships once per file in the repo payload.
 type FileHeat struct {
-	Path      string   `json:"p"`
-	Lines     int      `json:"l"`
-	Bytes     int64    `json:"b"`
-	Ext       string   `json:"x"`
-	Buckets   []Bucket `json:"k"`
-	LastEdit  int64    `json:"le"`
-	FirstEdit int64    `json:"fe"`
-	Commits   int      `json:"nc"`
-	TopAuthor string   `json:"ta"`
-	Authors   int      `json:"na"`
-	Generated bool     `json:"g,omitempty"`
-	Binary    bool     `json:"bin,omitempty"`
+	Path     string   `json:"p"`
+	Lines    int      `json:"l"`
+	Bytes    int64    `json:"b"`
+	Ext      string   `json:"x"`
+	Buckets  []Bucket `json:"k"`
+	LastEdit int64    `json:"le"`
+	// LastCommit is the short sha of the most recent commit to touch this file,
+	// so the map can name the commit behind a tile rather than only its age.
+	// Short rather than full because the commit itself travels in the same
+	// payload and is looked up from it — forty hex characters per file is 130 KB
+	// on a repository the size of authelia, for nothing.
+	LastCommit string `json:"lc,omitempty"`
+	FirstEdit  int64  `json:"fe"`
+	Commits    int    `json:"nc"`
+	TopAuthor  string `json:"ta"`
+	Authors    int    `json:"na"`
+	Generated  bool   `json:"g,omitempty"`
+	Binary     bool   `json:"bin,omitempty"`
 }
 
 // AuthorStat is one contributor's standing in the current working tree.

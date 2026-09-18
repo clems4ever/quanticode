@@ -444,6 +444,7 @@ export default function App() {
             query={query}
             onZoom={setZoom}
             onOpenFile={setOpenFile}
+            commits={data.commits}
           />
         )}
       </Box>
@@ -486,6 +487,7 @@ export default function App() {
             maxHeight={mapHeight - 44}
             onZoom={setZoom}
             onOpenFile={setOpenFile}
+            commits={data.commits}
           />
         ) : (
           <FileTable
@@ -645,6 +647,7 @@ export default function App() {
                         scheme={scheme}
                         now={now}
                         maxHeight={600}
+                        commits={data.commits}
                         onZoom={setZoom}
                         onOpenFile={setOpenFile}
                       />
@@ -704,6 +707,7 @@ export default function App() {
             key={openFile}
             path={openFile}
             src={src}
+            webUrl={ghUrl}
             scheme={scheme}
             now={now}
             halfLifeDays={halfLifeDays}
