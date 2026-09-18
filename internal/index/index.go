@@ -222,21 +222,29 @@ func (ix *Index) Get(src source.Source) (*Repo, Status) {
 
 	switch {
 	case e.state == StateReady:
-		stale := time.Since(e.indexedAt) > ix.opts.TTL
-		if stale && !e.inFlight {
+		// The answer and the status are taken together, under one hold of the
+		// lock, and the queueing happens afterwards. Releasing the lock to
+		// enqueue and then re-reading looks equivalent and is not: on a small
+		// repository a worker can start *and finish* the refresh inside that
+		// window, so the caller is handed a status describing a refresh that
+		// already happened rather than the one it just caused.
+		refresh := time.Since(e.indexedAt) > ix.opts.TTL && !e.inFlight
+		if refresh {
 			e.inFlight = true
-			e.mu.Unlock()
-			if err := ix.enqueue(e); err != nil {
-				// Refreshing is best-effort: the cached answer is still good.
-				e.mu.Lock()
-				e.inFlight = false
-				e.mu.Unlock()
-			}
-			e.mu.Lock()
 		}
 		repo := &Repo{Analyzer: e.analyzer, Payload: e.payload}
 		st := ix.statusLocked(e)
 		e.mu.Unlock()
+
+		if refresh {
+			if err := ix.enqueue(e); err != nil {
+				// Refreshing is best-effort: the cached answer is still good,
+				// and the next request will try again.
+				e.mu.Lock()
+				e.inFlight = false
+				e.mu.Unlock()
+			}
+		}
 		return repo, st
 
 	case e.inFlight:
