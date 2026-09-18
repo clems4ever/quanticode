@@ -66,8 +66,10 @@ refresh never makes anyone wait — only a repository nobody has asked for befor
 does.
 
 Clones are anonymous and ignore the ambient git configuration: no credential
-helper, no token, no `url.insteadOf` rewrite from the host. Public repositories
-only, and only from the hosts in `internal/source` — currently github.com.
+helper, no token, no `url.insteadOf` rewrite from the host. **Public
+repositories only** — a private one is indistinguishable from a missing one from
+the outside, and is reported as "no such public repository" rather than guessed
+at. Only the hosts in `internal/source` are cloned from, currently github.com.
 
 ### What an open instance is allowed to spend
 
@@ -231,12 +233,32 @@ tree aggregation, the summary statistics and the colour ramps.
 ## How it works
 
 The backend shells out to `git blame --line-porcelain -M -w` once per tracked
-file across a worker pool — the whole of a 600-file repository in a couple of
-seconds — and reduces each file to the line counts grouped by last-edit
-timestamp. That aggregate is a few hundred numbers per file, so the entire
-repository ships as one ~35 KB gzipped payload and every control (half-life,
-metric, filter, zoom) is recomputed in the browser with no round trip. Per-line
-blame is fetched on demand when a file is opened. Results are cached per HEAD,
+file across a worker pool, and reduces each file to the line counts grouped by
+last-edit timestamp. Binary files are excluded by a single `git grep -I` for the
+whole repository rather than a `git show` per file. That aggregate is a few
+hundred numbers per file, so a small repository ships as one ~35 KB gzipped
+payload and every control (half-life, metric, filter, zoom) is recomputed in the
+browser with no round trip. Per-line blame is fetched on demand when a file is
+opened.
+
+**The sweep is the cost, and it scales with history depth rather than file
+count.** Measured on a loaded eight-core box, so treat these as the shape rather
+than as a benchmark:
+
+| repository | files | commits | sweep | payload |
+| --- | --- | --- | --- | --- |
+| clems4ever/quanticode | 68 | 5 | 0.7s | 2 KB |
+| gin-gonic/gin | 130 | 2,011 | 8s | 114 KB |
+| authelia/authelia | 3,359 | 10,526 | **2m 40s** | 373 KB |
+
+Authelia is about 150ms of blame per file, roughly 500 CPU seconds of work, and
+there is no trick available: dropping `-M` was measured and is *slower*. So the
+sweep reports real progress — files completed, and a separate stage for the
+roll-up afterwards, which is another fifteen seconds on a history that size —
+rather than pretending it is quick. A repository that size is a first-visit wait
+of minutes, and only once.
+
+Results are cached per HEAD,
 so a reload is free until the repository actually moves.
 
 ```
