@@ -1,6 +1,9 @@
 import { useMemo, useRef, useState, type CSSProperties } from "react";
 import { hierarchy, treemap, treemapSquarify } from "d3-hierarchy";
-import { Box, Paper, Text } from "@mantine/core";
+import { Box, Group, Paper, Text } from "@mantine/core";
+import { IconGitCommit } from "@tabler/icons-react";
+import type { Commit } from "../lib/api";
+import { commitOf } from "../lib/commits";
 import type { TreeNode } from "../lib/tree";
 import { formatCompact, formatNumber, heatColor, inkOn, relativeTime } from "../lib/heat";
 
@@ -16,6 +19,8 @@ interface Props {
   query: string;
   onZoom: (path: string) => void;
   onOpenFile: (path: string) => void;
+  /** Every commit in the repository, so a tile can name the one behind it. */
+  commits: Record<string, Commit>;
 }
 
 interface Hover {
@@ -32,7 +37,7 @@ interface Hover {
  * area of the repo reads hot or cold before any individual file is examined.
  */
 export default function Treemap({
-  root, width, height, scheme, now, query, onZoom, onOpenFile,
+  root, width, height, scheme, now, query, onZoom, onOpenFile, commits,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<Hover | null>(null);
@@ -179,7 +184,15 @@ export default function Treemap({
         })}
       </svg>
 
-      {hover && <HoverCard hover={hover} scheme={scheme} now={now} bounds={{ width, height }} />}
+      {hover && (
+        <HoverCard
+          hover={hover}
+          scheme={scheme}
+          now={now}
+          bounds={{ width, height }}
+          commits={commits}
+        />
+      )}
     </Box>
   );
 }
@@ -201,17 +214,22 @@ function clip(s: string, max: number): string {
 }
 
 function HoverCard({
-  hover, scheme, now, bounds,
+  hover, scheme, now, bounds, commits,
 }: {
   hover: Hover;
   scheme: "dark" | "light";
   now: number;
   bounds: { width: number; height: number };
+  commits: Record<string, Commit>;
 }) {
   const { node } = hover;
-  const W = 268;
+  // The commit behind this tile's most recent change. The payload keys commits
+  // by full sha and files carry the short one, so the index is built once.
+  const commit = commitOf(node, commits);
+  const W = 290;
+  const H = commit ? 196 : 150;
   const left = Math.min(Math.max(8, hover.x + 16), Math.max(8, bounds.width - W - 8));
-  const top = hover.y > bounds.height - 150 ? Math.max(8, hover.y - 148) : hover.y + 16;
+  const top = hover.y > bounds.height - H ? Math.max(8, hover.y - (H - 2)) : hover.y + 16;
 
   const style: CSSProperties = {
     position: "absolute",
@@ -254,6 +272,29 @@ function HoverCard({
         <Text size="10px" c="dimmed" mt={4} fs="italic">
           generated file — {formatCompact(node.lines)} lines
         </Text>
+      )}
+
+      {/* The commit that made this tile the temperature it is. Without it the
+          card can only say "3 days ago", which answers when but never what. */}
+      {commit && (
+        <Box
+          mt={9}
+          pt={8}
+          style={{ borderTop: `1px solid ${scheme === "dark" ? "rgba(255,255,255,0.09)" : "rgba(0,0,0,0.08)"}` }}
+        >
+          <Group gap={5} wrap="nowrap" mb={3}>
+            <IconGitCommit size={12} style={{ flexShrink: 0, opacity: 0.6 }} />
+            <Text size="10px" c="dimmed" ff="monospace">
+              {commit.short}
+            </Text>
+          </Group>
+          <Text size="xs" lh={1.35} lineClamp={2}>
+            {commit.summary}
+          </Text>
+          <Text size="10px" c="dimmed" mt={2} truncate>
+            {commit.author} · {relativeTime(commit.time, now)}
+          </Text>
+        </Box>
       )}
     </Paper>
   );

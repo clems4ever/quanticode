@@ -13,6 +13,8 @@ export interface TreeNode {
   lines: number;
   heat: number;
   lastEdit: number;
+  /** Short sha of the commit behind lastEdit — for a folder, its newest file's. */
+  lastCommit?: string;
   commits: number;
   fileCount: number;
   children: TreeNode[];
@@ -87,6 +89,7 @@ function finalise(node: Building, now: number, halfLife: number, metric: HeatMet
       lines: f.l,
       heat: heatOf(f.k, now, halfLife, metric),
       lastEdit: f.le,
+      lastCommit: f.lc,
       commits: f.nc,
       fileCount: 1,
       children: [],
@@ -101,6 +104,7 @@ function finalise(node: Building, now: number, halfLife: number, metric: HeatMet
   const buckets: Bucket[] = [];
   let lines = 0;
   let lastEdit = 0;
+  let lastCommit: string | undefined;
   let fileCount = 0;
   const editTimes = new Set<number>();
 
@@ -110,7 +114,10 @@ function finalise(node: Building, now: number, halfLife: number, metric: HeatMet
       for (const [t] of n.file.k) editTimes.add(t);
       fileCount++;
     }
-    if (n.lastEdit > lastEdit) lastEdit = n.lastEdit;
+    if (n.lastEdit > lastEdit) {
+      lastEdit = n.lastEdit;
+      lastCommit = n.lastCommit;
+    }
     n.children.forEach(walk);
   };
   children.forEach(walk);
@@ -123,6 +130,7 @@ function finalise(node: Building, now: number, halfLife: number, metric: HeatMet
     lines,
     heat: heatOf(buckets, now, halfLife, metric),
     lastEdit,
+    lastCommit,
     // Distinct commit timestamps still surviving in this subtree — the number
     // of separate changes whose lines are still present, not total commits.
     commits: editTimes.size,
