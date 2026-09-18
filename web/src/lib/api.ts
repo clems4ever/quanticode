@@ -82,6 +82,10 @@ export interface IndexStatus {
   error?: string;
   position?: number;
   files?: number;
+  /** Files swept so far during the blame pass. */
+  blamed?: number;
+  /** Sub-stage of the analysis: "blaming" or "summarising". */
+  stage?: string;
   since?: number;
   indexedAt?: number;
   refreshing?: boolean;

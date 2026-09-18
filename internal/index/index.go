@@ -122,6 +122,8 @@ type Status struct {
 	Error      string `json:"error,omitempty"`
 	Position   int    `json:"position,omitempty"` // place in the queue, 1-based
 	Files      int    `json:"files,omitempty"`    // known once the tree is listed
+	Blamed     int    `json:"blamed,omitempty"`   // files swept so far, during analysis
+	Stage      string `json:"stage,omitempty"`    // sub-stage of the analysis
 	Since      int64  `json:"since,omitempty"`    // unix seconds the current state began
 	IndexedAt  int64  `json:"indexedAt,omitempty"`
 	Refreshing bool   `json:"refreshing,omitempty"` // serving a cached answer while re-indexing
@@ -136,6 +138,8 @@ type entry struct {
 	analyzer   *heat.Analyzer
 	payload    *heat.RepoPayload // last good analysis, served while re-indexing
 	files      int
+	blamed     int
+	stage      string
 	since      time.Time
 	indexedAt  time.Time
 	failedAt   time.Time
@@ -283,17 +287,29 @@ func (ix *Index) entryFor(src source.Source) *entry {
 	if e, ok := ix.entries[key]; ok {
 		return e
 	}
-	e := &entry{
-		src:   src,
-		state: "",
-		analyzer: &heat.Analyzer{
-			Slug: key,
-			Name: src.Label(),
-			Dir:  filepath.Join(ix.opts.Dir, filepath.FromSlash(src.Dir())),
-		},
-	}
+	e := &entry{src: src, state: ""}
+	e.analyzer = ix.newAnalyzer(e, key, src.Label(),
+		filepath.Join(ix.opts.Dir, filepath.FromSlash(src.Dir())))
 	ix.entries[key] = e
 	return e
+}
+
+// newAnalyzer builds an analyzer wired to report its sweep progress back into
+// the entry, so /api/status can answer "how far in is it" rather than only
+// "still going".
+func (ix *Index) newAnalyzer(e *entry, slug, name, dir string) *heat.Analyzer {
+	return &heat.Analyzer{
+		Slug: slug,
+		Name: name,
+		Dir:  dir,
+		OnProgress: func(stage string, done, total int) {
+			e.mu.Lock()
+			e.stage = stage
+			e.blamed = done
+			e.files = total
+			e.mu.Unlock()
+		},
+	}
 }
 
 // statusLocked builds the wire status. e.mu must be held.
@@ -304,6 +320,8 @@ func (ix *Index) statusLocked(e *entry) Status {
 		State:  e.state,
 		Error:  e.err,
 		Files:  e.files,
+		Blamed: e.blamed,
+		Stage:  e.stage,
 	}
 	if st.State == "" {
 		st.State = StateQueued
@@ -439,6 +457,8 @@ func (ix *Index) run(e *entry) {
 
 	e.mu.Lock()
 	e.files = len(files)
+	e.blamed = 0
+	e.stage = heat.StageBlaming
 	e.mu.Unlock()
 	e.setState(StateAnalysing)
 
@@ -454,6 +474,8 @@ func (ix *Index) run(e *entry) {
 	e.mu.Lock()
 	e.state = StateReady
 	e.err = ""
+	e.blamed = 0
+	e.stage = ""
 	e.payload = payload
 	e.indexedAt = time.Now()
 	e.since = e.indexedAt
@@ -578,7 +600,7 @@ func (ix *Index) evict(keep *entry) {
 		e.indexedAt = time.Time{}
 		e.bytes = 0
 		e.payload = nil
-		e.analyzer = &heat.Analyzer{Slug: e.analyzer.Slug, Name: e.analyzer.Name, Dir: dir}
+		e.analyzer = ix.newAnalyzer(e, e.analyzer.Slug, e.analyzer.Name, dir)
 		e.mu.Unlock()
 
 		if err := os.RemoveAll(dir); err != nil {

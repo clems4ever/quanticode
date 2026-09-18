@@ -10,9 +10,13 @@ import { formatNumber } from "../lib/heat";
  * The states are named rather than hidden behind a spinner, because the wait is
  * long enough that "what is it doing" is a fair question: a first-time clone of
  * a large repository is minutes, and a queue behind two workers can add more.
- * There is no percentage to show honestly — git reports none for a clone, and
- * the blame sweep only knows its own file count — so this shows the stage and
- * the size, and an indeterminate bar rather than a fake number.
+ *
+ * The blame sweep is the long part — authelia/authelia is 3,359 files and about
+ * three minutes — and it was reported as "does not work" precisely because a
+ * stage name with no number behind it looks identical to a hang. So the sweep
+ * shows a real count and a real bar. The clone still shows an indeterminate one,
+ * because git reports no usable progress for it and a made-up percentage is
+ * worse than an honest spinner.
  */
 export default function IndexProgress({
   status,
@@ -64,6 +68,10 @@ export default function IndexProgress({
   }
 
   const stage = describe(status);
+  // Only the sweep can be measured; everything else is honestly indeterminate.
+  const sweeping = status.state === "analysing" && status.stage !== "summarising";
+  const swept = sweeping && status.files ? (status.blamed ?? 0) : 0;
+  const pct = swept > 0 && status.files ? Math.min(100, (swept / status.files) * 100) : null;
 
   return (
     <Center h="100vh" p="xl">
@@ -76,14 +84,25 @@ export default function IndexProgress({
           {stage}
         </Text>
         <Box w="100%" mt={4}>
-          <Progress value={100} animated radius="xl" size="xs" color="gray" />
+          <Progress
+            value={pct ?? 100}
+            animated={pct === null}
+            radius="xl"
+            size="xs"
+            color="gray"
+          />
         </Box>
-        <Text c="dimmed" size="xs">
+        <Text c="dimmed" size="xs" style={{ fontVariantNumeric: "tabular-nums" }}>
           {formatElapsed(elapsed)}
-          {status.files ? ` · ${formatNumber(status.files)} files` : ""}
+          {pct !== null && status.files
+            ? ` · ${formatNumber(swept)} of ${formatNumber(status.files)} files · ${Math.floor(pct)}%`
+            : status.files
+              ? ` · ${formatNumber(status.files)} files`
+              : ""}
         </Text>
         <Text c="dimmed" size="xs" ta="center" mt={4}>
-          First look at a repository only. The result is cached, so coming back is instant.
+          First look at a repository only — a large one takes a few minutes. The result is
+          cached, so coming back is instant.
         </Text>
       </Stack>
     </Center>
@@ -101,9 +120,12 @@ function describe(status: IndexStatus): string {
     case "fetching":
       return "Fetching what has changed…";
     case "analysing":
+      if (status.stage === "summarising") return "Rolling up authors and history…";
       return status.files
         ? `Blaming ${formatNumber(status.files)} files, line by line…`
         : "Blaming every line…";
+    case "ready":
+      return "Loading the analysis…";
     default:
       return "Working…";
   }

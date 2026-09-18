@@ -19,6 +19,16 @@ type Analyzer struct {
 	Name string
 	Dir  string
 
+	// OnProgress, when set, is called as the analysis advances. A large
+	// repository is minutes of blame, and a stage name with no number behind it
+	// is indistinguishable from a hang — which is exactly how it was reported.
+	//
+	// The stage matters as much as the count. Rolling up authors and walking the
+	// history for the timeline happens after the last file is blamed, and on a
+	// repository with ten thousand commits that is another fifteen seconds; a
+	// bar sitting at 100% for that long reads as stuck all over again.
+	OnProgress func(stage string, done, total int)
+
 	mu     sync.Mutex
 	cached *RepoPayload
 	head   string
@@ -43,6 +53,12 @@ func (a *Analyzer) Payload() (*RepoPayload, error) {
 	return p, nil
 }
 
+// Stages reported through OnProgress.
+const (
+	StageBlaming     = "blaming"
+	StageSummarising = "summarising"
+)
+
 type blameResult struct {
 	file    FileHeat
 	commits map[string]Commit
@@ -57,8 +73,15 @@ func (a *Analyzer) analyze(head string) (*RepoPayload, error) {
 		return nil, err
 	}
 
+	// Resolved once for the repository rather than per file.
+	text, err := gitrepo.TextFiles(a.Dir)
+	if err != nil {
+		return nil, err
+	}
+
 	jobs := make(chan string)
 	results := make(chan blameResult)
+	done := make(chan struct{}, len(files))
 	workers := runtime.NumCPU()
 	if workers > 12 {
 		workers = 12
@@ -69,9 +92,10 @@ func (a *Analyzer) analyze(head string) (*RepoPayload, error) {
 		go func() {
 			defer wg.Done()
 			for f := range jobs {
-				if r, ok := a.blameOne(f); ok {
+				if r, ok := a.blameOne(f, text); ok {
 					results <- r
 				}
+				done <- struct{}{}
 			}
 		}()
 	}
@@ -82,6 +106,24 @@ func (a *Analyzer) analyze(head string) (*RepoPayload, error) {
 		close(jobs)
 		wg.Wait()
 		close(results)
+		close(done)
+	}()
+
+	// Counted in its own goroutine so a slow progress callback cannot stall the
+	// workers. Reported at most every 1% or 25 files, whichever is coarser: the
+	// browser polls every 1.5s and does not need more.
+	go func() {
+		step := len(files) / 100
+		if step < 25 {
+			step = 25
+		}
+		n := 0
+		for range done {
+			n++
+			if a.OnProgress != nil && (n%step == 0 || n == len(files)) {
+				a.OnProgress(StageBlaming, n, len(files))
+			}
+		}
 	}()
 
 	payload := &RepoPayload{
@@ -102,6 +144,12 @@ func (a *Analyzer) analyze(head string) (*RepoPayload, error) {
 	}
 	sort.Slice(payload.Files, func(i, j int) bool { return payload.Files[i].Path < payload.Files[j].Path })
 
+	// Every file is blamed by here; what remains is the roll-up and a full walk
+	// of the history for the timeline, which is not instant on a big repository.
+	if a.OnProgress != nil {
+		a.OnProgress(StageSummarising, len(files), len(files))
+	}
+
 	payload.Authors = a.buildAuthors(authorLines, payload.Commits)
 	payload.Timeline = a.buildTimeline()
 	payload.Meta = a.buildMeta(head, payload, start)
@@ -111,9 +159,10 @@ func (a *Analyzer) analyze(head string) (*RepoPayload, error) {
 	return payload, nil
 }
 
-// blameOne turns a single file into its heat aggregate.
-func (a *Analyzer) blameOne(f string) (blameResult, bool) {
-	if gitrepo.IsBinary(a.Dir, f) {
+// blameOne turns a single file into its heat aggregate. text is the set of
+// paths git considers textual, resolved once for the whole repository.
+func (a *Analyzer) blameOne(f string, text map[string]bool) (blameResult, bool) {
+	if !text[f] {
 		return blameResult{}, false
 	}
 	shas, _, commits, err := gitrepo.Blame(a.Dir, f, false)

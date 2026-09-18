@@ -2,6 +2,7 @@ package index_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -286,5 +287,56 @@ func TestPreflightFailureFallsThroughToTheClone(t *testing.T) {
 	ix.Get(src)
 	if st := await(t, ix, src); st.State != index.StateReady {
 		t.Fatalf("state = %q, error %q", st.State, st.Error)
+	}
+}
+
+func TestProgressIsReportedDuringTheSweep(t *testing.T) {
+	// Enough files that the sweep reports at least once: a repository of three
+	// files finishes before anything could be observed mid-flight.
+	r := testrepo.New(t)
+	for i := 0; i < 60; i++ {
+		r.WriteLines(fmt.Sprintf("pkg/file%02d.go", i), "package pkg", "// one", "// two")
+	}
+	r.Commit("first", "Ada", "ada@example.com", time.Now())
+
+	ix := newIndex(t, r.Dir, index.Options{})
+	src := mustSource(t, "github.com/example/repo")
+
+	ix.Get(src)
+	st := await(t, ix, src)
+	if st.State != index.StateReady {
+		t.Fatalf("state = %q, error %q", st.State, st.Error)
+	}
+	// The total is known and the counter is cleared once the sweep is done, so
+	// a ready repository does not claim to still be working.
+	if st.Files != 60 {
+		t.Errorf("Files = %d, want 60", st.Files)
+	}
+	if st.Blamed != 0 {
+		t.Errorf("Blamed = %d once ready, want 0", st.Blamed)
+	}
+}
+
+func TestBinaryFilesAreExcludedFromTheSweep(t *testing.T) {
+	r := testrepo.New(t)
+	r.WriteLines("main.go", "package main")
+	r.Write("logo.png", "\x89PNG\r\n\x1a\n\x00\x00\x00binary\x00data")
+	r.Commit("first", "Ada", "ada@example.com", time.Now())
+
+	ix := newIndex(t, r.Dir, index.Options{})
+	src := mustSource(t, "github.com/example/repo")
+	ix.Get(src)
+	if st := await(t, ix, src); st.State != index.StateReady {
+		t.Fatalf("state = %q, error %q", st.State, st.Error)
+	}
+
+	repo, _ := ix.Get(src)
+	for _, f := range repo.Payload.Files {
+		if f.Path == "logo.png" {
+			t.Error("a binary file reached the analysis")
+		}
+	}
+	if len(repo.Payload.Files) != 1 {
+		t.Errorf("Files = %d, want just main.go", len(repo.Payload.Files))
 	}
 }
