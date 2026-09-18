@@ -171,7 +171,9 @@ export default function App() {
   );
 
   if (landing) {
-    return <Landing onOpen={openSource} localRepos={instance?.repos ?? []} />;
+    return (
+      <Landing onOpen={openSource} localRepos={instance?.repos ?? []} limits={instance?.limits} />
+    );
   }
 
   if (error) {

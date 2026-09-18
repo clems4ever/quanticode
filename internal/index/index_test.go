@@ -1,9 +1,12 @@
 package index_test
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/clems4ever/quanticode/internal/forge"
 	"github.com/clems4ever/quanticode/internal/index"
 	"github.com/clems4ever/quanticode/internal/source"
 	"github.com/clems4ever/quanticode/internal/testrepo"
@@ -15,6 +18,11 @@ func newIndex(t *testing.T, from string, opts index.Options) *index.Index {
 	t.Helper()
 	opts.Dir = t.TempDir()
 	opts.CloneURL = func(source.Source) string { return from }
+	if opts.Probe == nil {
+		// No pre-flight by default: these sources are not on a real forge, and
+		// the suite must not touch the network.
+		opts.Probe = func(context.Context, source.Source) (*forge.Info, error) { return nil, nil }
+	}
 	ix, err := index.New(opts)
 	if err != nil {
 		t.Fatalf("index.New: %v", err)
@@ -210,6 +218,72 @@ func TestConcurrentGetsDoNotDuplicateWork(t *testing.T) {
 		<-done
 	}
 
+	if st := await(t, ix, src); st.State != index.StateReady {
+		t.Fatalf("state = %q, error %q", st.State, st.Error)
+	}
+}
+
+func TestPreflightRefusesBeforeCloning(t *testing.T) {
+	r := testrepo.New(t)
+	r.WriteLines("a.go", "package a")
+	r.Commit("first", "Ada", "ada@example.com", time.Now())
+
+	var probed int
+	ix := newIndex(t, r.Dir, index.Options{
+		RepoBudget: 100 << 20,
+		Probe: func(context.Context, source.Source) (*forge.Info, error) {
+			probed++
+			return &forge.Info{SizeBytes: 6 << 30}, nil // a Linux-sized repository
+		},
+	})
+	src := mustSource(t, "github.com/example/huge")
+
+	ix.Get(src)
+	st := await(t, ix, src)
+	if st.State != index.StateFailed {
+		t.Fatalf("state = %q, want failed", st.State)
+	}
+	if probed == 0 {
+		t.Error("the forge was never asked")
+	}
+	// The point of the pre-flight is the message: it must name the real size
+	// rather than whatever the clone happened to reach before being killed.
+	if !strings.Contains(st.Error, "6144 MB") || !strings.Contains(st.Error, "100 MB") {
+		t.Errorf("error = %q, want it to name both the size and the limit", st.Error)
+	}
+}
+
+func TestPreflightNotFoundIsRefusedImmediately(t *testing.T) {
+	ix := newIndex(t, "/nonexistent", index.Options{
+		Probe: func(context.Context, source.Source) (*forge.Info, error) {
+			return nil, forge.ErrNotFound
+		},
+	})
+	src := mustSource(t, "github.com/example/gone")
+
+	ix.Get(src)
+	st := await(t, ix, src)
+	if st.State != index.StateFailed {
+		t.Fatalf("state = %q, want failed", st.State)
+	}
+	if !strings.Contains(st.Error, "no such public repository") {
+		t.Errorf("error = %q, want the not-found message", st.Error)
+	}
+}
+
+func TestPreflightFailureFallsThroughToTheClone(t *testing.T) {
+	r := testrepo.New(t)
+	r.WriteLines("a.go", "package a")
+	r.Commit("first", "Ada", "ada@example.com", time.Now())
+
+	// A forge that says nothing useful — rate limited, unreachable — must not
+	// stop a repository being indexed.
+	ix := newIndex(t, r.Dir, index.Options{
+		Probe: func(context.Context, source.Source) (*forge.Info, error) { return nil, nil },
+	})
+	src := mustSource(t, "github.com/example/repo")
+
+	ix.Get(src)
 	if st := await(t, ix, src); st.State != index.StateReady {
 		t.Fatalf("state = %q, error %q", st.State, st.Error)
 	}

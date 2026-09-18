@@ -60,9 +60,17 @@ only, and only from the hosts in `internal/source` — currently github.com.
 
 Because any stranger can name any repository, every job is bounded:
 
+Oversized repositories are refused **before anything is cloned**: the forge is
+asked how big the repository is, which takes well under a second, and a refusal
+names the real size. The byte budget below is still enforced during the clone as
+a backstop, for a forge that will not say or says something untrue — but it is no
+longer how a visitor normally finds out. Discovering that `torvalds/linux` is
+6.2 GB by downloading 512 MB of it takes minutes and loads the machine; asking
+takes 0.4 seconds.
+
 | flag | default | what it bounds |
 | --- | --- | --- |
-| `-max-repo-mb` | 512 | one clone; the clone is killed the moment it passes this, not after |
+| `-max-repo-mb` | 512 | one clone; checked against the forge first, then enforced during the clone |
 | `-max-files` | 25000 | tracked files, checked before the blame sweep rather than during it |
 | `-clone-timeout` | 10m | one clone or fetch |
 | `-index-workers` | 2 | repositories cloned and analysed at once |
@@ -74,6 +82,11 @@ Because any stranger can name any repository, every job is bounded:
 A repository that fails to index is remembered for ten minutes rather than
 retried on every reload, so a typo'd name cannot be used to keep the workers
 busy.
+
+The limits are reported on `/api/instance` and stated on the landing page, so a
+visitor reads what will be refused rather than discovering it by waiting.
+`QUANTICODE_FORGE_TOKEN` raises the unauthenticated GitHub rate limit for the
+pre-flight probe from 60 requests an hour to 5000; it is never used for cloning.
 
 ## The heat model
 
@@ -219,6 +232,7 @@ internal/gitrepo/   git commands: list, blame, binary and generated detection
 internal/heat/      the blame sweep and the per-file aggregates (the heat lens)
 internal/source/    the URL shape: host/owner/repo, parsed and validated
 internal/index/     lazy on-demand cloning, refresh, limits and eviction
+internal/forge/     asks a host about a repository before it is cloned
 internal/server/    HTTP API, gzip, static hosting of the SPA
 internal/testrepo/  builds throwaway git repos for the tests
 web/                React + TypeScript + Mantine

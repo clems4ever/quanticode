@@ -87,10 +87,18 @@ export interface IndexStatus {
   refreshing?: boolean;
 }
 
+/** The bounds this deployment enforces, so the page can state them up front. */
+export interface Limits {
+  maxRepoMB: number;
+  maxFiles: number;
+  refreshHours: number;
+}
+
 /** What this deployment can do, read once at startup. */
 export interface Instance {
   indexing: boolean;
   hosts?: string[];
+  limits?: Limits;
   repos: { slug: string; name: string; primary: boolean }[];
 }
 

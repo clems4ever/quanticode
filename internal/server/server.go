@@ -229,9 +229,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 type instanceInfo struct {
-	Indexing bool        `json:"indexing"`
-	Hosts    []string    `json:"hosts,omitempty"`
-	Repos    []repoEntry `json:"repos"`
+	Indexing bool          `json:"indexing"`
+	Hosts    []string      `json:"hosts,omitempty"`
+	Limits   *index.Limits `json:"limits,omitempty"`
+	Repos    []repoEntry   `json:"repos"`
 }
 
 // handleInstance tells the frontend what this deployment can do: whether it
@@ -240,6 +241,8 @@ func (s *Server) handleInstance(w http.ResponseWriter, r *http.Request) {
 	info := instanceInfo{Indexing: s.index != nil, Repos: s.repoEntries()}
 	if s.index != nil {
 		info.Hosts = source.Hosts()
+		lim := s.index.Limits()
+		info.Limits = &lim
 	}
 	writeJSON(w, info, 60)
 }

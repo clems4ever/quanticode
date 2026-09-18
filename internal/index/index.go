@@ -15,6 +15,7 @@ package index
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/clems4ever/quanticode/internal/forge"
 	"github.com/clems4ever/quanticode/internal/gitrepo"
 	"github.com/clems4ever/quanticode/internal/heat"
 	"github.com/clems4ever/quanticode/internal/source"
@@ -55,6 +57,12 @@ type Options struct {
 	// forge's own URL; tests set it to a local path so the suite never needs
 	// the network.
 	CloneURL func(source.Source) string
+
+	// Probe asks the forge how big a repository is before it is cloned, so an
+	// oversized one is refused in a second rather than after minutes of
+	// transfer. Left nil, a default client is used; set it to a no-op to turn
+	// the pre-flight off.
+	Probe func(context.Context, source.Source) (*forge.Info, error)
 }
 
 // Defaults fills anything left at zero with a value suitable for a small public
@@ -86,6 +94,10 @@ func (o Options) Defaults() Options {
 	}
 	if o.CloneURL == nil {
 		o.CloneURL = func(s source.Source) string { return s.CloneURL() }
+	}
+	if o.Probe == nil {
+		c := &forge.Client{Token: os.Getenv("QUANTICODE_FORGE_TOKEN")}
+		o.Probe = c.Probe
 	}
 	return o
 }
@@ -167,6 +179,24 @@ func New(opts Options) (*Index, error) {
 		go ix.worker()
 	}
 	return ix, nil
+}
+
+// Limits are the bounds this index enforces, for the UI to state up front. A
+// limit a visitor only discovers by hitting it is a bug in the page, not in the
+// limit.
+type Limits struct {
+	MaxRepoMB int64 `json:"maxRepoMB"`
+	MaxFiles  int   `json:"maxFiles"`
+	RefreshH  int   `json:"refreshHours"`
+}
+
+// Limits reports what this index will and will not take on.
+func (ix *Index) Limits() Limits {
+	return Limits{
+		MaxRepoMB: ix.opts.RepoBudget >> 20,
+		MaxFiles:  ix.opts.MaxFiles,
+		RefreshH:  int(ix.opts.TTL / time.Hour),
+	}
 }
 
 // Close stops the workers and waits for the job in flight.
@@ -353,14 +383,25 @@ func (ix *Index) run(e *entry) {
 	_, statErr := os.Stat(filepath.Join(dir, "HEAD"))
 	haveClone := statErr == nil
 
+	ctx, cancel := context.WithTimeout(context.Background(), ix.opts.CloneTimeout)
+	defer cancel()
+
+	if !haveClone {
+		// Ask before downloading. The byte budget below still guards the clone,
+		// but finding out that way costs minutes and a loaded machine, and the
+		// visitor waits through all of it to be told no.
+		if msg, refuse := ix.preflight(ctx, e.src); refuse {
+			e.fail(msg)
+			log.Printf("[%s] refused before cloning: %s", e.src, msg)
+			return
+		}
+	}
+
 	if haveClone {
 		e.setState(StateFetching)
 	} else {
 		e.setState(StateCloning)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), ix.opts.CloneTimeout)
-	defer cancel()
 
 	var err error
 	if haveClone {
@@ -424,6 +465,24 @@ func (ix *Index) run(e *entry) {
 		e.src, len(files), size>>20, time.Since(start).Round(time.Millisecond))
 
 	ix.evict(e)
+}
+
+// preflight returns a refusal message and true when the forge already tells us
+// the repository cannot be indexed here. Anything it cannot determine is not a
+// refusal: the clone goes ahead and the byte budget is the backstop.
+func (ix *Index) preflight(ctx context.Context, src source.Source) (string, bool) {
+	info, err := ix.opts.Probe(ctx, src)
+	if errors.Is(err, forge.ErrNotFound) {
+		return "no such public repository (it may be private, renamed or deleted)", true
+	}
+	if info == nil || info.SizeBytes <= 0 {
+		return "", false
+	}
+	if info.SizeBytes > ix.opts.RepoBudget {
+		return fmt.Sprintf("repository is %d MB, larger than the %d MB this instance indexes",
+			info.SizeBytes>>20, ix.opts.RepoBudget>>20), true
+	}
+	return "", false
 }
 
 func tooManyFiles(got, max int) string {

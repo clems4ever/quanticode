@@ -4,13 +4,23 @@ import {
 } from "@mantine/core";
 import { IconArrowRight, IconSearch } from "@tabler/icons-react";
 import { parseInput, pathForSource } from "../lib/source";
+import type { Limits } from "../lib/api";
 
-/** A few well-known repositories, as a way in for somebody with nothing to paste. */
+/**
+ * A way in for somebody with nothing to paste.
+ *
+ * Every one of these is checked to fit inside the default size limit, because
+ * an example that cannot work is worse than no example at all: it reads as the
+ * whole service being broken rather than as one repository being too big. The
+ * sizes are from the GitHub API and are what these were when this list was
+ * written.
+ */
 const EXAMPLES = [
-  "github.com/torvalds/linux",
-  "github.com/golang/go",
-  "github.com/facebook/react",
-  "github.com/clems4ever/quanticode",
+  { src: "github.com/gin-gonic/gin", note: "10 MB" },
+  { src: "github.com/jqlang/jq", note: "8 MB" },
+  { src: "github.com/charmbracelet/bubbletea", note: "6 MB" },
+  { src: "github.com/cli/cli", note: "79 MB" },
+  { src: "github.com/clems4ever/quanticode", note: "" },
 ];
 
 /**
@@ -23,9 +33,11 @@ const EXAMPLES = [
 export default function Landing({
   onOpen,
   localRepos,
+  limits,
 }: {
   onOpen: (src: string) => void;
   localRepos: { slug: string; name: string }[];
+  limits?: Limits;
 }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +77,7 @@ export default function Landing({
             <Text size="sm" fw={560}>
               Put <Code>quanticode.dev/</Code> in front of any GitHub URL
             </Text>
-            <Code block>quanticode.dev/github.com/torvalds/linux</Code>
+            <Code block>quanticode.dev/github.com/gin-gonic/gin</Code>
             <Text size="xs" c="dimmed">
               Or paste one here.
             </Text>
@@ -88,7 +100,11 @@ export default function Landing({
             </Group>
             <Text size="xs" c="dimmed">
               Public repositories only. The first look clones and blames the whole history, which
-              takes a moment; after that it is cached and refreshed daily.
+              takes a moment; after that it is cached
+              {limits?.refreshHours ? ` and refreshed every ${limits.refreshHours}h` : ""}.
+              {limits?.maxRepoMB
+                ? ` This instance indexes repositories up to ${formatSize(limits.maxRepoMB)} and ${formatCount(limits.maxFiles)} files — very large repositories such as the Linux kernel are refused.`
+                : ""}
             </Text>
           </Stack>
         </Card>
@@ -97,10 +113,16 @@ export default function Landing({
           <Text size="xs" c="dimmed" tt="uppercase" fw={600} style={{ letterSpacing: "0.06em" }}>
             Try one
           </Text>
-          <Group gap="xs">
-            {EXAMPLES.map((src) => (
+          <Group gap="md">
+            {EXAMPLES.map(({ src, note }) => (
               <Anchor key={src} href={pathForSource(src)} size="sm" underline="hover">
                 {src.replace("github.com/", "")}
+                {note && (
+                  <Text span size="xs" c="dimmed">
+                    {" "}
+                    {note}
+                  </Text>
+                )}
               </Anchor>
             ))}
           </Group>
@@ -123,4 +145,12 @@ export default function Landing({
       </Stack>
     </Center>
   );
+}
+
+function formatSize(mb: number): string {
+  return mb >= 1024 ? `${(mb / 1024).toFixed(mb % 1024 === 0 ? 0 : 1)} GB` : `${mb} MB`;
+}
+
+function formatCount(n: number): string {
+  return n.toLocaleString("en-US");
 }
