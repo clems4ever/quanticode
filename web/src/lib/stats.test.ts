@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  calibrateHalfLife, computeStats, defaultHalfLife, HALF_LIFE_PRESETS, hotShare,
+  calibrateHeat, computeStats, defaultHalfLife, HALF_LIFE_PRESETS, hotShare,
 } from "./stats";
 import type { FileHeat } from "./api";
 
@@ -102,7 +102,7 @@ describe("defaultHalfLife", () => {
   });
 });
 
-describe("calibrateHalfLife", () => {
+describe("calibrateHeat", () => {
   const now = Date.parse("2026-09-18T00:00:00Z") / 1000;
   const DAY = 86400;
 
@@ -119,35 +119,57 @@ describe("calibrateHalfLife", () => {
     na: 1,
   });
 
-  it("picks a short half-life for a repository written today", () => {
-    // Everything is hot at every scale, so the shortest is the only one that
-    // separates this morning from last night.
-    expect(calibrateHalfLife([aged("a.go", 100, 0.1)], now)).toBe("0.5");
+  /**
+   * A repository of `count` files whose ages fan out over `spanDays`.
+   *
+   * Spread has to come from files differing in age, not from one file
+   * containing a range: the map colours a file by the mean of its lines, so a
+   * single file of mixed ages renders as one colour however wide that range is.
+   */
+  const varied = (count: number, spanDays: number, linesEach = 100): FileHeat[] =>
+    Array.from({ length: count }, (_, i) =>
+      aged(`f${i}.go`, linesEach, (i / Math.max(1, count - 1)) * spanDays));
+
+  it("never washes the map to the hot end when it has a choice", () => {
+    // The failure this exists to prevent: a half-life long enough that most of
+    // the repository reads hot, leaving nothing to contrast against.
+    const files = [...varied(40, 400), aged("old.go", 2000, 1200)];
+    const c = calibrateHeat(files, now);
+    expect(c.hotShare).toBeLessThanOrEqual(0.18);
   });
 
-  it("picks the longest for a dormant repository", () => {
-    // Nothing reaches the target at any scale. The widest is the only one that
-    // shows anything at all, and a short one would render it uniformly black.
-    const files = [aged("a.go", 100, 900), aged("b.go", 100, 1200)];
-    const longest = HALF_LIFE_PRESETS[HALF_LIFE_PRESETS.length - 1].value;
-    expect(calibrateHalfLife(files, now)).toBe(longest);
+  it("does not overshoot when the hot share jumps", () => {
+    // A repository written in one burst 27 days ago: the hot share goes from
+    // near zero at two weeks to near everything at one month. Taking the first
+    // half-life over a target would pick the flooded one.
+    const files = [aged("a.go", 1000, 27), aged("b.go", 500, 27.5)];
+    const c = calibrateHeat(files, now);
+    expect(c.hotShare).toBeLessThan(0.9);
   });
 
-  it("takes the shortest half-life that still reads hot enough", () => {
-    // 15 lines of 100 are 80 days old; the rest are years old. One month leaves
-    // the recent cohort cold, three months brings it over the line.
-    const files = [aged("recent.go", 15, 80), aged("old.go", 85, 1500)];
-    expect(hotShare(files, now, 30)).toBeLessThan(0.15);
-    expect(hotShare(files, now, 90)).toBeGreaterThanOrEqual(0.15);
-    expect(calibrateHalfLife(files, now)).toBe("90");
+  it("reports a single-age repository as flat rather than pretending", () => {
+    // Every line the same age: no half-life separates it, and saying so is
+    // more useful than choosing one and rendering a flat map.
+    const files = [aged("a.go", 900, 27), aged("b.go", 800, 27.2)];
+    expect(calibrateHeat(files, now).flat).toBe(true);
   });
 
-  it("does not wash the map to the hot end", () => {
-    // The failure that started this: a half-life so long that most of the
-    // repository reads hot and there is no cold background to contrast with.
-    const files = [aged("a.go", 30, 100), aged("b.go", 70, 400)];
-    const chosen = Number(calibrateHalfLife(files, now));
-    expect(hotShare(files, now, chosen)).toBeLessThan(0.6);
+  it("does not call a repository with real age variation flat", () => {
+    const files = varied(40, 900);
+    expect(calibrateHeat(files, now).flat).toBe(false);
+  });
+
+  it("takes the shortest half-life for a repository written today", () => {
+    // Hot at every scale, so nothing satisfies the cap; the shortest is the
+    // only one separating this morning from last night.
+    expect(calibrateHeat([aged("a.go", 100, 0.1)], now).halfLife).toBe("0.5");
+  });
+
+  it("uses a long half-life for a dormant repository", () => {
+    // Nothing is hot at any scale, so the cap rules nothing out and the widest
+    // scale is the one that shows any structure at all.
+    const files = [aged("a.go", 100, 900), aged("b.go", 100, 1400)];
+    expect(Number(calibrateHeat(files, now).halfLife)).toBeGreaterThanOrEqual(180);
   });
 
   it("always returns a value the picker offers", () => {
@@ -156,9 +178,17 @@ describe("calibrateHalfLife", () => {
       [aged("a.go", 10, 0.2)],
       [aged("a.go", 10, 45)],
       [aged("a.go", 10, 5000)],
+      varied(20, 300),
       [],
     ]) {
-      expect(offered).toContain(calibrateHalfLife(files, now));
+      expect(offered).toContain(calibrateHeat(files, now).halfLife);
     }
+  });
+
+  it("reports the spread it achieved", () => {
+    const c = calibrateHeat(varied(40, 700), now);
+    expect(c.spread).toBeGreaterThan(0);
+    expect(c.spread).toBeLessThanOrEqual(1);
+    expect(hotShare(varied(40, 700), now, Number(c.halfLife))).toBeGreaterThanOrEqual(0);
   });
 });

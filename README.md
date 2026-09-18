@@ -129,20 +129,47 @@ the wrong input: authelia and gin-gonic/gin are both about a decade old and want
 very different half-lives, because what differs is how recently the code was
 last touched, not how long the project has existed.
 
-So quanticode measures the thing that matters: it walks the presets from
-shortest to longest and takes **the first at which at least a sixth of the code
-still reads hot**. Both ends fall out correctly — a repository committed to
-today is hot at every scale and gets the shortest, which is the only one that
-separates this morning from last night; a dormant repository never reaches the
-target and gets the longest, which is the only scale that shows anything at all.
+Two things have to hold at once, and each alone picks a bad answer.
 
-| repository | calibrated | share reading hot |
-| --- | --- | --- |
-| clems4ever/quanticode | 12 hours | 100% |
-| authelia/authelia | 3 months | 15% |
-| charmbracelet/bubbletea | 1 year | 15% |
-| gin-gonic/gin | 1 year | 3% |
-| sindresorhus/slugify | 1 year | 0% (dormant) |
+**Maximising spread alone** picks a year on authelia — the very rendering this
+is meant to fix — because an even histogram and a legible map are not the same
+thing. Every variant does: entropy by line, by file and by root-line-count, and
+Otsu separability and plain variance both land on a plateau flat enough to be
+noise.
+
+**Targeting a share of hot code alone** is worse, because it has no guard
+against overshoot. On a repository written in one burst the hot share jumps from
+1.9% at one week straight to 99.9% at one month, so "the first half-life
+reaching the target" selects the uniformly orange one.
+
+So quanticode takes **the most spread, among the half-lives that do not wash the
+map to the hot end** (more than 18% of lines reading hot). When every half-life
+washes out — a repository committed to entirely today — it takes the least
+washed, which is the shortest and the only one separating this morning from last
+night.
+
+| repository | calibrated | spread | reads hot |
+| --- | --- | --- | --- |
+| charmbracelet/bubbletea | 1 year | 0.76 | 15% |
+| authelia/authelia | 3 months | 0.69 | 15% |
+| gin-gonic/gin | 1 year | 0.57 | 3% |
+| sindresorhus/slugify | 1 year | 0.54 | 0% |
+| clems4ever/github-runner | 1 week | **0.34** | 2% |
+
+### When no half-life works
+
+The last row is not a calibration failure. `github-runner` has 75% of its lines
+inside a *0.7-day window*, 27 days ago — the whole repository arrived in one
+burst. Heat is monotonic in age, so when every line is the same age every line
+is the same colour, whatever half-life is chosen; at one month 86% of the map
+lands in a single band and reads as flat orange.
+
+quanticode says so rather than pretending: below a spread of 0.35 the control is
+badged **uniform age**, and its tooltip explains that the flatness is itself a
+finding — code that arrives all at once usually came from one import or one
+generated burst. For a tool meant to give humans a reason to trust code they did
+not write, "this all appeared at the same moment" is worth surfacing, not
+hiding.
 
 Because the value is preselected, the control says so: an **auto** badge sits
 next to it, and its tooltip gives the figure the calibration was working from.

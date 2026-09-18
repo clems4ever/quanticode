@@ -15,7 +15,7 @@ import {
 import { pathForSource, sourceFromPath } from "./lib/source";
 import { buildTree, findNode, pathChain, type TreeNode } from "./lib/tree";
 import { formatCompact, formatNumber, relativeTime, type HeatMetric } from "./lib/heat";
-import { calibrateHalfLife, computeStats, HALF_LIFE_PRESETS, hotShare } from "./lib/stats";
+import { calibrateHeat, computeStats, HALF_LIFE_PRESETS, type Calibration } from "./lib/stats";
 import { DEFAULT_RANGE_DAYS, defaultRangeFor } from "./lib/timeline";
 import Treemap from "./components/Treemap";
 import AreaRanking from "./components/AreaRanking";
@@ -47,6 +47,7 @@ export default function App() {
   // Whether the half-life on screen was calibrated for this repository or
   // chosen by hand. It is preselected, so it has to say so.
   const [halfLifeAuto, setHalfLifeAuto] = useState(true);
+  const [calibration, setCalibration] = useState<Calibration | null>(null);
   const [metric, setMetric] = useState<HeatMetric>("average");
   const [showGenerated, setShowGenerated] = useState(false);
   const [query, setQuery] = useState("");
@@ -102,7 +103,9 @@ export default function App() {
     // own pace, so one value cannot serve authelia and a repo started today.
     // Generated files are excluded because they are hidden by default and would
     // otherwise drag the measurement around.
-    setHalfLife(calibrateHalfLife(d.files.filter((f) => !f.g), Date.now() / 1000));
+    const c = calibrateHeat(d.files.filter((f) => !f.g), Date.now() / 1000);
+    setCalibration(c);
+    setHalfLife(c.halfLife);
     setHalfLifeAuto(true);
     if (!rangePinned.current) {
       setActivityRange(defaultRangeFor(d.timeline, Date.now() / 1000));
@@ -192,14 +195,9 @@ export default function App() {
 
   const zoomed = useMemo(() => (tree ? findNode(tree, zoom) ?? tree : null), [tree, zoom]);
   const crumbs = useMemo(() => (tree ? pathChain(tree, zoomed?.path ?? "") : []), [tree, zoomed]);
-  // What the calibration is actually looking at, shown in the tooltip so the
-  // preselected value can be checked rather than taken on faith. Must sit with
-  // the other hooks: everything below here can return early.
-  const hotHere = useMemo(() => hotShare(files, now, halfLifeDays), [files, now, halfLifeDays]);
-
   const resetHalfLife = () => {
-    if (!data) return;
-    setHalfLife(calibrateHalfLife(data.files.filter((f) => !f.g), Date.now() / 1000));
+    if (!calibration) return;
+    setHalfLife(calibration.halfLife);
     setHalfLifeAuto(true);
   };
 
@@ -298,18 +296,22 @@ export default function App() {
             {halfLifeAuto ? (
               <Tooltip
                 multiline
-                w={270}
+                w={300}
                 withArrow
-                label={`Calibrated for this repository: the shortest half-life at which about a sixth of the code still reads hot (${Math.round(hotHere * 100)}% here). A longer one washes the map to the hot end; a shorter one goes dark.`}
+                label={
+                  calibration?.flat
+                    ? "Nearly every line in this repository is the same age, so no half-life separates it and the map reads as one colour whatever is chosen. That flatness is itself a finding: it usually means the code arrived in one import or one generated burst."
+                    : `Calibrated for this repository: the half-life that spreads its colours widest without washing the map to the hot end (${Math.round((calibration?.hotShare ?? 0) * 100)}% of the code reads hot here). A longer one floods it; a shorter one goes dark.`
+                }
               >
                 <Badge
                   size="xs"
                   variant="light"
-                  color="gray"
+                  color={calibration?.flat ? "orange" : "gray"}
                   radius="sm"
                   style={{ cursor: "help", textTransform: "none" }}
                 >
-                  auto
+                  {calibration?.flat ? "uniform age" : "auto"}
                 </Badge>
               </Tooltip>
             ) : (
