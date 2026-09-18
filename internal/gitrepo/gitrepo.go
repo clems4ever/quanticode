@@ -45,9 +45,10 @@ func Line(repo string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// ListFiles returns every tracked path at HEAD.
+// ListFiles returns every tracked path at HEAD. It reads the commit rather than
+// the index, so it works the same in a bare clone, which has no index at all.
 func ListFiles(repo string) ([]string, error) {
-	out, err := Run(repo, "ls-files", "-z")
+	out, err := Run(repo, "ls-tree", "-r", "--name-only", "-z", "HEAD")
 	if err != nil {
 		return nil, err
 	}

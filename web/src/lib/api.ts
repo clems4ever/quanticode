@@ -74,16 +74,63 @@ export interface FilePayload {
   ext: string;
 }
 
+/** How far an on-demand index has got. Mirrors index.Status on the server. */
+export interface IndexStatus {
+  source: string;
+  label: string;
+  state: "queued" | "cloning" | "fetching" | "analysing" | "ready" | "failed";
+  error?: string;
+  position?: number;
+  files?: number;
+  since?: number;
+  indexedAt?: number;
+  refreshing?: boolean;
+}
+
+/** What this deployment can do, read once at startup. */
+export interface Instance {
+  indexing: boolean;
+  hosts?: string[];
+  repos: { slug: string; name: string; primary: boolean }[];
+}
+
+/**
+ * A repository request either comes back analysed, or comes back as progress.
+ * The two are told apart by status code, never by the shape of the body:
+ * 200 is the analysis, 202 is work in flight, 422 is an index that failed.
+ */
+export type RepoResult =
+  | { kind: "ready"; data: RepoPayload }
+  | { kind: "indexing"; status: IndexStatus };
+
+/** Query string selecting the repository: a remote source, or nothing. */
+function scope(src: string | null): string {
+  return src ? `src=${encodeURIComponent(src)}` : "";
+}
+
 async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`);
   return res.json() as Promise<T>;
 }
 
-export const fetchRepo = () => getJSON<RepoPayload>("/api/repo");
+export const fetchInstance = () => getJSON<Instance>("/api/instance");
 
-export const fetchFile = (path: string) =>
-  getJSON<FilePayload>(`/api/file?path=${encodeURIComponent(path)}`);
+export async function fetchRepo(src: string | null): Promise<RepoResult> {
+  const res = await fetch(`/api/repo?${scope(src)}`);
+  if (res.status === 202 || res.status === 422) {
+    return { kind: "indexing", status: (await res.json()) as IndexStatus };
+  }
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`);
+  return { kind: "ready", data: (await res.json()) as RepoPayload };
+}
+
+/** Polls progress without causing any work, so it is safe on a short interval. */
+export const fetchStatus = (src: string) =>
+  getJSON<IndexStatus>(`/api/status?src=${encodeURIComponent(src)}`);
+
+export const fetchFile = (path: string, src: string | null = null) =>
+  getJSON<FilePayload>(`/api/file?path=${encodeURIComponent(path)}&${scope(src)}`);
 
 /** Strip a GitHub remote down to "owner/repo" for display. */
 export function remoteLabel(remote: string): string {

@@ -3,6 +3,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/clems4ever/quanticode/internal/heat"
+	"github.com/clems4ever/quanticode/internal/index"
+	"github.com/clems4ever/quanticode/internal/source"
 )
 
 // Repo names one repository the server should analyse and serve.
@@ -20,22 +23,34 @@ type Repo struct {
 	Dir  string
 }
 
-// Server serves one or more analysed repositories and the SPA that reads them.
+// Server serves analysed repositories and the SPA that reads them.
+//
+// Two sources, either or both: repositories named on the command line, which
+// are local clones addressed by slug, and — when an index is attached —
+// anything a visitor names in the URL, cloned on demand.
 type Server struct {
 	repos   map[string]*heat.Analyzer
 	order   []string
 	webDir  string
 	primary string
+	index   *index.Index
 }
 
-// New validates every repository and prepares the server. The returned error
-// names the first repository that is not usable, so a typo in a path fails at
-// startup rather than on the first request.
+// New prepares a server over local clones only. The returned error names the
+// first repository that is not usable, so a typo in a path fails at startup
+// rather than on the first request.
 func New(repos []Repo, webDir string) (*Server, error) {
-	if len(repos) == 0 {
+	return NewIndexed(repos, webDir, nil)
+}
+
+// NewIndexed prepares a server that can also clone and analyse public
+// repositories on demand. With an index attached, no local repository is
+// required: the instance may start empty and fill up as people ask for things.
+func NewIndexed(repos []Repo, webDir string, ix *index.Index) (*Server, error) {
+	if len(repos) == 0 && ix == nil {
 		return nil, ErrNoRepos
 	}
-	s := &Server{repos: map[string]*heat.Analyzer{}, webDir: webDir}
+	s := &Server{repos: map[string]*heat.Analyzer{}, webDir: webDir, index: ix}
 	for _, r := range repos {
 		abs, err := filepath.Abs(r.Dir)
 		if err != nil {
@@ -58,7 +73,9 @@ func New(repos []Repo, webDir string) (*Server, error) {
 		s.repos[slug] = &heat.Analyzer{Slug: slug, Name: name, Dir: abs}
 		s.order = append(s.order, slug)
 	}
-	s.primary = s.order[0]
+	if len(s.order) > 0 {
+		s.primary = s.order[0]
+	}
 	return s, nil
 }
 
@@ -78,9 +95,11 @@ func (s *Server) Warm() {
 // Handler returns the fully wired HTTP handler, compression and logging included.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/instance", s.handleInstance)
 	mux.HandleFunc("/api/repos", s.handleRepos)
 	mux.HandleFunc("/api/repo", s.handleRepo)
 	mux.HandleFunc("/api/file", s.handleFile)
+	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok"))
@@ -103,13 +122,55 @@ func Slugify(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-// analyzer resolves the ?repo= parameter, falling back to the primary
-// repository so a missing or unknown slug still renders something.
-func (s *Server) analyzer(r *http.Request) *heat.Analyzer {
-	if a, ok := s.repos[r.URL.Query().Get("repo")]; ok {
-		return a
+// resolution is the outcome of working out which repository a request is about.
+// Exactly one of analyzer, status or err is meaningful, in that order.
+type resolution struct {
+	analyzer *heat.Analyzer
+	// payload is the already-computed analysis for an indexed repository. A
+	// local clone leaves it nil and is analysed on read, because it can move
+	// under us at any moment.
+	payload *heat.RepoPayload
+	status  *index.Status // indexing in progress; nothing to serve yet
+	err     error         // the request named something unusable
+	code    int
+}
+
+// analysis returns the payload to serve, computing it only for local clones.
+func (r resolution) analysis() (*heat.RepoPayload, error) {
+	if r.payload != nil {
+		return r.payload, nil
 	}
-	return s.repos[s.primary]
+	return r.analyzer.Payload()
+}
+
+// resolve works out which repository a request is about.
+//
+// ?src=github.com/owner/repo is the on-demand path and is what the URL shape
+// quanticode.dev/github.com/owner/repo turns into. ?repo=slug is a local clone
+// named on the command line. With neither, the primary local repository is used
+// so a single-repo instance needs no query string at all.
+func (s *Server) resolve(r *http.Request) resolution {
+	if raw := r.URL.Query().Get("src"); raw != "" {
+		if s.index == nil {
+			return resolution{err: errors.New("this instance does not index remote repositories"), code: http.StatusNotFound}
+		}
+		src, err := source.Parse(raw)
+		if err != nil {
+			return resolution{err: err, code: http.StatusBadRequest}
+		}
+		repo, st := s.index.Get(src)
+		if repo == nil {
+			return resolution{status: &st}
+		}
+		return resolution{analyzer: repo.Analyzer, payload: repo.Payload}
+	}
+	if a, ok := s.repos[r.URL.Query().Get("repo")]; ok {
+		return resolution{analyzer: a}
+	}
+	if s.primary == "" {
+		return resolution{err: errors.New("no repository given: try /github.com/owner/repo"), code: http.StatusNotFound}
+	}
+	return resolution{analyzer: s.repos[s.primary]}
 }
 
 type repoEntry struct {
@@ -119,20 +180,68 @@ type repoEntry struct {
 }
 
 func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, s.repoEntries(), 60)
+}
+
+func (s *Server) repoEntries() []repoEntry {
 	out := make([]repoEntry, 0, len(s.order))
 	for _, slug := range s.order {
 		out = append(out, repoEntry{slug, s.repos[slug].Name, slug == s.primary})
 	}
-	writeJSON(w, out, 60)
+	return out
 }
 
 func (s *Server) handleRepo(w http.ResponseWriter, r *http.Request) {
-	p, err := s.analyzer(r).Payload()
+	res := s.resolve(r)
+	switch {
+	case res.err != nil:
+		http.Error(w, res.err.Error(), res.code)
+		return
+	case res.status != nil:
+		// 202: the request was accepted and the work has started. The browser
+		// shows progress and polls /api/status.
+		writeStatus(w, *res.status, http.StatusAccepted)
+		return
+	}
+	p, err := res.analysis()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// An indexed repository is only re-analysed on the refresh cycle, but a
+	// local clone can move under us at any moment, so this stays short.
 	writeJSON(w, p, 30)
+}
+
+// handleStatus reports indexing progress without starting any work, so polling
+// it is free.
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if s.index == nil {
+		http.Error(w, "this instance does not index remote repositories", http.StatusNotFound)
+		return
+	}
+	src, err := source.Parse(r.URL.Query().Get("src"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeStatus(w, s.index.Status(src), http.StatusOK)
+}
+
+type instanceInfo struct {
+	Indexing bool        `json:"indexing"`
+	Hosts    []string    `json:"hosts,omitempty"`
+	Repos    []repoEntry `json:"repos"`
+}
+
+// handleInstance tells the frontend what this deployment can do: whether it
+// will index arbitrary repositories, and which local ones it already has.
+func (s *Server) handleInstance(w http.ResponseWriter, r *http.Request) {
+	info := instanceInfo{Indexing: s.index != nil, Repos: s.repoEntries()}
+	if s.index != nil {
+		info.Hosts = source.Hosts()
+	}
+	writeJSON(w, info, 60)
 }
 
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
@@ -145,7 +254,16 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
-	fp, err := s.analyzer(r).File(p)
+	res := s.resolve(r)
+	switch {
+	case res.err != nil:
+		http.Error(w, res.err.Error(), res.code)
+		return
+	case res.status != nil:
+		writeStatus(w, *res.status, http.StatusAccepted)
+		return
+	}
+	fp, err := res.analyzer.File(p)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -192,6 +310,22 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-cache")
 	http.ServeFile(w, r, index)
+}
+
+// writeStatus reports indexing progress. It is never cached: the whole point of
+// the response is that it changes.
+func writeStatus(w http.ResponseWriter, st index.Status, code int) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if st.State == index.StateFailed {
+		// Not 200: a caller asking for the analysis must be able to tell a
+		// finished payload from a status document without inspecting its shape.
+		code = http.StatusUnprocessableEntity
+	}
+	w.WriteHeader(code)
+	if err := json.NewEncoder(w).Encode(st); err != nil {
+		log.Printf("encode: %v", err)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v any, maxAge int) {

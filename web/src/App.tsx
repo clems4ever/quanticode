@@ -8,7 +8,11 @@ import { useElementSize, useMediaQuery } from "@mantine/hooks";
 import {
   IconArrowBackUp, IconBrandGithub, IconMoon, IconSearch, IconSun, IconX,
 } from "@tabler/icons-react";
-import { fetchRepo, remoteLabel, remoteWebUrl, type RepoPayload } from "./lib/api";
+import {
+  fetchInstance, fetchRepo, fetchStatus, remoteLabel, remoteWebUrl,
+  type IndexStatus, type Instance, type RepoPayload,
+} from "./lib/api";
+import { pathForSource, sourceFromPath } from "./lib/source";
 import { buildTree, findNode, pathChain, type TreeNode } from "./lib/tree";
 import { formatCompact, formatNumber, relativeTime, type HeatMetric } from "./lib/heat";
 import { computeStats, defaultHalfLife, HALF_LIFE_PRESETS } from "./lib/stats";
@@ -19,6 +23,8 @@ import ActivityChart from "./components/ActivityChart";
 import FileViewer from "./components/FileViewer";
 import HeatLegend from "./components/HeatLegend";
 import StatTiles, { type Stat } from "./components/StatTiles";
+import IndexProgress from "./components/IndexProgress";
+import Landing from "./components/Landing";
 
 type MobilePanel = "map" | "areas" | "files" | "activity";
 
@@ -27,8 +33,14 @@ export default function App() {
   const scheme: "dark" | "light" = colorScheme === "light" ? "light" : "dark";
   const isMobile = useMediaQuery("(max-width: 62em)") ?? false;
 
+  // The repository being looked at comes from the path: /github.com/owner/repo.
+  // Null is the landing page.
+  const [src, setSrc] = useState<string | null>(() => sourceFromPath(window.location.pathname));
+  const [instance, setInstance] = useState<Instance | null>(null);
   const [data, setData] = useState<RepoPayload | null>(null);
+  const [status, setStatus] = useState<IndexStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   const [halfLife, setHalfLife] = useState<string>("3");
   const [metric, setMetric] = useState<HeatMetric>("average");
@@ -42,13 +54,91 @@ export default function App() {
   const { ref: mapRef, width: mapWidth } = useElementSize();
 
   useEffect(() => {
-    fetchRepo()
-      .then((d) => {
-        setData(d);
-        setHalfLife(defaultHalfLife(d.meta.firstCommit, d.meta.lastCommit));
-      })
-      .catch((e) => setError(String(e)));
+    fetchInstance()
+      .then(setInstance)
+      .catch(() => setInstance({ indexing: false, repos: [] }));
   }, []);
+
+  // Back and forward move between repositories without a reload.
+  useEffect(() => {
+    const onPop = () => setSrc(sourceFromPath(window.location.pathname));
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  const openSource = (next: string) => {
+    window.history.pushState({}, "", pathForSource(next));
+    setSrc(next);
+  };
+
+  // No source in the path and nothing served locally: there is nothing to load,
+  // so show the landing page rather than asking the server for a repository it
+  // was never given.
+  const landing = src === null && instance !== null && instance.repos.length === 0;
+
+  const adopt = (d: RepoPayload) => {
+    setData(d);
+    setStatus(null);
+    setHalfLife(defaultHalfLife(d.meta.firstCommit, d.meta.lastCommit));
+  };
+
+  useEffect(() => {
+    if (instance === null || landing) return;
+    let cancelled = false;
+    setData(null);
+    setStatus(null);
+    setError(null);
+    fetchRepo(src)
+      .then((res) => {
+        if (cancelled) return;
+        if (res.kind === "ready") adopt(res.data);
+        else setStatus(res.status);
+      })
+      .catch((e) => !cancelled && setError(String(e)));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src, instance, landing, attempt]);
+
+  // An index in flight. Failed is terminal, so it stops the polling.
+  const indexing = status !== null && status.state !== "failed" && data === null;
+
+  useEffect(() => {
+    if (!src || !indexing) return;
+    let cancelled = false;
+    const id = setInterval(async () => {
+      try {
+        const st = await fetchStatus(src);
+        if (cancelled) return;
+        setStatus(st);
+        if (st.state === "ready") {
+          const res = await fetchRepo(src);
+          if (!cancelled && res.kind === "ready") adopt(res.data);
+        }
+      } catch (e) {
+        if (!cancelled) setError(String(e));
+      }
+    }, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src, indexing]);
+
+  // A second clock, because the progress screen counts in seconds where the
+  // rest of the app is happy being a minute out.
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!indexing) {
+      setElapsed(0);
+      return;
+    }
+    const t0 = Date.now();
+    const id = setInterval(() => setElapsed((Date.now() - t0) / 1000), 1000);
+    return () => clearInterval(id);
+  }, [indexing]);
 
   // The clock only needs to be fresh enough that "2h ago" is not wrong; it
   // re-renders every minute rather than every frame.
@@ -80,6 +170,10 @@ export default function App() {
     [files, now, halfLifeDays, metric],
   );
 
+  if (landing) {
+    return <Landing onOpen={openSource} localRepos={instance?.repos ?? []} />;
+  }
+
   if (error) {
     return (
       <Center h="100vh" p="xl">
@@ -90,6 +184,12 @@ export default function App() {
           </Text>
         </Stack>
       </Center>
+    );
+  }
+
+  if (status && !data) {
+    return (
+      <IndexProgress status={status} elapsed={elapsed} onRetry={() => setAttempt((n) => n + 1)} />
     );
   }
 
@@ -367,9 +467,15 @@ export default function App() {
               </Box>
               <Box style={{ minWidth: 0 }}>
                 <Group gap={7} wrap="nowrap">
-                  <Text fw={720} size="sm" lh={1.15} style={{ letterSpacing: "-0.01em" }}>
+                  <Anchor
+                    href="/"
+                    underline="never"
+                    c="inherit"
+                    fw={720}
+                    style={{ fontSize: "var(--mantine-font-size-sm)", lineHeight: 1.15, letterSpacing: "-0.01em" }}
+                  >
                     quanticode
-                  </Text>
+                  </Anchor>
                   <Text size="sm" c="dimmed" lh={1.15}>
                     /
                   </Text>
@@ -516,6 +622,7 @@ export default function App() {
           <FileViewer
             key={openFile}
             path={openFile}
+            src={src}
             scheme={scheme}
             now={now}
             halfLifeDays={halfLifeDays}

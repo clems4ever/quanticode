@@ -29,6 +29,52 @@ line under the cursor.
 **The timeline** is commit activity over the repository's life, with each bar at
 its own position on the same heat scale.
 
+## Indexing a repository
+
+Put quanticode in front of a GitHub URL:
+
+```
+https://quanticode.dev/github.com/torvalds/linux
+```
+
+That is the whole interface. The path after the origin *is* the repository, so
+there is no form to fill in, nothing to sign into, and the URL for any project
+can be worked out rather than looked up. Pasting a deeper GitHub URL works too —
+`/tree/main` and `/blob/main/x.go` are trimmed back to the repository.
+
+Indexing is **lazy**: nothing is cloned until somebody asks for it. The first
+request for a repository queues a bare clone and a blame sweep and returns a
+progress document; the browser shows the stage it has reached and polls until
+the analysis is ready. Everything after that is served from the result.
+
+A clone older than the refresh window (`-refresh`, a day by default) is
+re-fetched in the background **while the previous answer is still served**, so a
+refresh never makes anyone wait — only a repository nobody has asked for before
+does.
+
+Clones are anonymous and ignore the ambient git configuration: no credential
+helper, no token, no `url.insteadOf` rewrite from the host. Public repositories
+only, and only from the hosts in `internal/source` — currently github.com.
+
+### What an open instance is allowed to spend
+
+Because any stranger can name any repository, every job is bounded:
+
+| flag | default | what it bounds |
+| --- | --- | --- |
+| `-max-repo-mb` | 512 | one clone; the clone is killed the moment it passes this, not after |
+| `-max-files` | 25000 | tracked files, checked before the blame sweep rather than during it |
+| `-clone-timeout` | 10m | one clone or fetch |
+| `-index-workers` | 2 | repositories cloned and analysed at once |
+| `-max-disk-mb` | 20480 | every clone together; the least recently looked at are evicted |
+| `-refresh` | 24h | how stale an analysis may get before it is rebuilt |
+| `-cache` | user cache dir | where clones are kept |
+| `-index=false` | — | turn the whole thing off and serve only `-repo` clones |
+
+A repository that fails to index is remembered for ten minutes rather than
+retried on every reload, so a typo'd name cannot be used to keep the workers
+busy.
+
 ## The heat model
 
 A line's heat is an exponential decay of its age:
@@ -80,13 +126,21 @@ toggle brings them back. Detection covers `vendor/`, `node_modules/`, `gen/`,
 ### With Docker
 
 ```sh
+docker run --rm -p 8090:8090 -v quanticode-cache:/cache \
+  ghcr.io/clems4ever/quanticode:latest -cache /cache
+```
+
+Then open <http://localhost:8090/github.com/torvalds/linux>, or any other
+repository. The volume keeps the clones across restarts.
+
+To serve a local clone instead of indexing remote ones, mount it and name it:
+
+```sh
 docker run --rm -p 8090:8090 \
   -v /path/to/a/git/clone:/repo:ro \
   ghcr.io/clems4ever/quanticode:latest \
   -repo myrepo=/repo
-```
-
-Then open <http://localhost:8090>. Images are published for `linux/amd64` and
+``` Images are published for `linux/amd64` and
 `linux/arm64` on every release, tagged `latest`, `X.Y.Z`, `X.Y` and `X`.
 
 Mount the repository read-only — quanticode only ever reads. It runs as a non-root
@@ -163,6 +217,8 @@ so a reload is free until the repository actually moves.
 cmd/quanticode/     flag parsing and process wiring, nothing else
 internal/gitrepo/   git commands: list, blame, binary and generated detection
 internal/heat/      the blame sweep and the per-file aggregates (the heat lens)
+internal/source/    the URL shape: host/owner/repo, parsed and validated
+internal/index/     lazy on-demand cloning, refresh, limits and eviction
 internal/server/    HTTP API, gzip, static hosting of the SPA
 internal/testrepo/  builds throwaway git repos for the tests
 web/                React + TypeScript + Mantine

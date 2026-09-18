@@ -14,6 +14,8 @@ const OVERSCAN = 30;
 
 interface Props {
   path: string;
+  /** Repository the path belongs to; null for the locally served one. */
+  src: string | null;
   scheme: "dark" | "light";
   now: number;
   halfLifeDays: number;
@@ -31,7 +33,7 @@ interface Props {
  * competing with the text for legibility.
  */
 export default function FileViewer({
-  path, scheme, now, halfLifeDays, onClose, isMobile,
+  path, src, scheme, now, halfLifeDays, onClose, isMobile,
 }: Props) {
   const [data, setData] = useState<FilePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -45,13 +47,13 @@ export default function FileViewer({
   // fresh and this effect only has to fetch.
   useEffect(() => {
     let cancelled = false;
-    fetchFile(path)
+    fetchFile(path, src)
       .then((d) => !cancelled && setData(d))
       .catch((e) => !cancelled && setError(String(e)));
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [path, src]);
 
   useEffect(() => {
     const el = viewportRef.current;
