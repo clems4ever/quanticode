@@ -119,6 +119,19 @@ how `heat`, `tree`, `stats`, `timeline` and `source` ended up there.
 is between a value and a behaviour: whether a half-life is calibrated correctly
 is a unit test, whether the pane it colours can be scrolled is not.
 
+Two things keep that suite honest, both learned by getting them wrong:
+
+- **It owns port 8123 and never reuses a running server.** 8099 is where you run
+  an instance while working; borrowing it means the suite silently tests
+  whatever happens to be listening, and an instance serving no local repository
+  shows the landing page instead.
+- **It opens a file by name, not by rank.** The Files list is ordered by heat, so
+  "the first row" is a different file tomorrow.
+
+**Check exit codes, not output.** `npm test | grep …` reports grep's status, not
+the command's — which is how a broken `npm test` reached CI green-looking from
+here. Run the step, then look at `$?`.
+
 **Payload keys are short** (`p`, `l`, `k`, `le`, `lc`) because one ships per file
 and a large repository has thousands. Comment the meaning in the Go struct and
 in `web/src/lib/api.ts`; do not lengthen them.

@@ -21,7 +21,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: process.env.CI ? [["github"], ["list"]] : [["list"]],
   use: {
-    baseURL: "http://127.0.0.1:8099",
+    baseURL: "http://127.0.0.1:8123",
     trace: "retain-on-failure",
   },
   projects: [
@@ -35,10 +35,15 @@ export default defineConfig({
   ],
   webServer: {
     // Built binary and built frontend, serving the checkout it was built from.
-    command:
-      "../quanticode -addr :8099 -web dist -index=false -repo self=..",
-    url: "http://127.0.0.1:8099/healthz",
-    reuseExistingServer: !process.env.CI,
+    //
+    // Its own port, and never reused. 8099 is what a developer runs an instance
+    // on while working, and borrowing it means the suite silently tests
+    // whatever happens to be listening — an instance serving no local
+    // repository shows the landing page, and every test then fails for a reason
+    // that has nothing to do with the code.
+    command: "../quanticode -addr :8123 -web dist -index=false -repo self=..",
+    url: "http://127.0.0.1:8123/healthz",
+    reuseExistingServer: false,
     timeout: 120_000,
     stdout: "pipe",
     stderr: "pipe",

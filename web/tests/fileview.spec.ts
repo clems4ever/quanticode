@@ -11,12 +11,20 @@ import { expect, test, type Page } from "@playwright/test";
  * exactly right. Only moving the wheel showed it.
  */
 
-/** Opens the first file in the Files ranking, the way a reader reaches one. */
-async function openFirstFile(page: Page) {
+/**
+ * Opens one named file, the way a reader reaches one: filter, Files, click.
+ *
+ * A named file rather than whichever happens to rank first — ranking is by
+ * heat, so "the top of the list" is a different file on a different day and a
+ * test that depends on it fails for reasons that are not about the code.
+ * README.md is long enough to scroll and present in every checkout.
+ */
+async function openFile(page: Page, name = "README.md") {
   await page.goto("/");
   // The repository is analysed at startup; the map appears when it is ready.
   await expect(page.locator(".gh-tile, .gh-area-row").first()).toBeVisible({ timeout: 30_000 });
 
+  await page.getByPlaceholder(/filter by path/i).fill(name);
   await page.getByText("Files", { exact: true }).first().click();
   await page.locator(".gh-area-row").first().click();
 
@@ -29,20 +37,30 @@ function viewport(page: Page) {
   return page.locator(".gh-code").locator("xpath=ancestor::*[contains(@class,'ScrollArea-viewport')][1]");
 }
 
-/** The first line number currently rendered, which moves as the pane scrolls. */
+/**
+ * The first line number in the DOM.
+ *
+ * Not the first line *visible*: the pane renders thirty rows of overscan either
+ * side, so this only advances once the pane has moved past them. Tests that
+ * care should scroll well beyond a screenful.
+ */
 async function firstRenderedLine(page: Page): Promise<number> {
   const text = await page.locator(".gh-code-num").first().innerText();
   return Number(text.trim());
 }
 
+/** Rows kept outside the viewport by the virtualiser, and their height. */
+const OVERSCAN_PX = 30 * 19;
+
 test.describe("scrolling a source file", () => {
   test("the pane scrolls vertically", async ({ page }) => {
-    await openFirstFile(page);
+    await openFile(page);
     const vp = viewport(page);
 
-    // A file worth scrolling: if it fits on screen there is nothing to assert.
+    // A file worth scrolling: if it fits on screen there is nothing to assert,
+    // and it has to clear the overscan for the rendered window to move at all.
     const [scrollHeight, clientHeight] = await vp.evaluate((el) => [el.scrollHeight, el.clientHeight]);
-    expect(scrollHeight, "pick a file taller than the pane").toBeGreaterThan(clientHeight);
+    expect(scrollHeight, "pick a file taller than the pane").toBeGreaterThan(clientHeight + OVERSCAN_PX);
 
     // The regression in one assertion: overflow-y must not be hidden, or none
     // of the ways a reader moves through a file work.
@@ -54,30 +72,35 @@ test.describe("scrolling a source file", () => {
 
   test("the wheel moves the file", async ({ page, isMobile }) => {
     test.skip(isMobile, "a touch device has no wheel; touch scrolling is covered below");
-    await openFirstFile(page);
+    await openFile(page);
     const vp = viewport(page);
 
     const before = await firstRenderedLine(page);
     const box = await vp.boundingBox();
     await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
-    await page.mouse.wheel(0, 2000);
+
+    // Past the overscan, so the rendered window genuinely moves rather than the
+    // pane merely scrolling within rows that were already in the DOM.
+    for (let i = 0; i < 4; i++) await page.mouse.wheel(0, 1200);
 
     await expect.poll(() => vp.evaluate((el) => el.scrollTop), {
       message: "the wheel did not move the pane",
-    }).toBeGreaterThan(0);
-    await expect.poll(() => firstRenderedLine(page)).toBeGreaterThan(before);
+    }).toBeGreaterThan(OVERSCAN_PX);
+    await expect.poll(() => firstRenderedLine(page), {
+      message: "the pane scrolled but rendered the same rows",
+    }).toBeGreaterThan(before);
   });
 
   test("touch scrolling moves the file", async ({ page, isMobile }) => {
     test.skip(!isMobile, "covers the phone path, where there is no heat strip");
-    await openFirstFile(page);
+    await openFile(page);
     const vp = viewport(page);
     await vp.evaluate((el) => el.scrollTo({ top: 1200 }));
     await expect.poll(() => vp.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
   });
 
   test("only one vertical scrollbar is drawn", async ({ page, isMobile }) => {
-    await openFirstFile(page);
+    await openFile(page);
     const bars = page
       .locator(".gh-code-scroll .mantine-ScrollArea-scrollbar[data-orientation='vertical']")
       .filter({ visible: true });
@@ -94,7 +117,7 @@ test.describe("scrolling a source file", () => {
 
   test("the heat strip scrubs the file", async ({ page, isMobile }) => {
     test.skip(isMobile, "the strip is desktop only");
-    await openFirstFile(page);
+    await openFile(page);
     const vp = viewport(page);
     const strip = page.locator(".gh-code-minimap");
 
@@ -112,7 +135,7 @@ test.describe("scrolling a source file", () => {
 
 test.describe("blame and highlighting", () => {
   test("names the commit behind a line", async ({ page, isMobile }) => {
-    await openFirstFile(page);
+    await openFile(page);
     const row = page.locator(".gh-code-row").nth(3);
 
     // Hover on a desktop, tap on a phone — the same information either way,
@@ -125,7 +148,7 @@ test.describe("blame and highlighting", () => {
   });
 
   test("colours the code", async ({ page }) => {
-    await openFirstFile(page);
+    await openFile(page);
     // Highlighting is lazy: the core, the engine and the grammar arrive after
     // the file does, and the file is readable in plain text until they land.
     await expect

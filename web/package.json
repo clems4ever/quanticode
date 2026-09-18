@@ -9,8 +9,8 @@
     "lint": "oxlint src --deny-warnings",
     "preview": "vite preview",
     "typecheck": "tsc -b",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run src",
+    "test:watch": "vitest src",
     "shots": "node scripts/shots.mjs",
     "test:ui": "playwright test"
   },
