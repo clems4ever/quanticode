@@ -26,8 +26,21 @@ bottom rather than by hunting for colour. Folders rank ahead of loose files.
 commit that last touched it, with a whole-file minimap and the commit behind the
 line under the cursor.
 
-**The timeline** is commit activity over the repository's life, with each bar at
-its own position on the same heat scale.
+**The timeline** is commit activity over a window — 30 days, 90 days, a year or
+the whole history — with each bar at its own position on the same heat scale.
+
+The window matters more than it sounds. A twelve-year history drawn at one bar
+per week is 640 two-pixel hairlines, and scaling those against the busiest week
+of 2014 flattens everything recent to nothing. So the bucket follows the window
+(days, weeks or months, whichever keeps the bars readable) and the bars are
+scaled within it.
+
+The opening window is chosen from the repository's own activity rather than
+fixed, because no fixed value works: the last 30 days of gin-gonic/gin carries
+commits on exactly one day, and bubbletea two — both healthy projects a 30-day
+chart would draw as abandoned. quanticode takes the shortest window with at
+least a dozen active days in it, and a dormant repository is shown whole so it
+is clear when it was alive. Picking a window yourself overrides that for good.
 
 ## Indexing a repository
 

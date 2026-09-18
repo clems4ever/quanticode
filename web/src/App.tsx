@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionIcon, Anchor, Badge, Box, Breadcrumbs, Center, Container, Divider, Drawer, Grid,
   Group, Loader, Paper, SegmentedControl, Select, Stack, Switch, Text, TextInput, Title,
@@ -16,6 +16,7 @@ import { pathForSource, sourceFromPath } from "./lib/source";
 import { buildTree, findNode, pathChain, type TreeNode } from "./lib/tree";
 import { formatCompact, formatNumber, relativeTime, type HeatMetric } from "./lib/heat";
 import { computeStats, defaultHalfLife, HALF_LIFE_PRESETS } from "./lib/stats";
+import { DEFAULT_RANGE_DAYS, defaultRangeFor } from "./lib/timeline";
 import Treemap from "./components/Treemap";
 import AreaRanking from "./components/AreaRanking";
 import FileTable from "./components/FileTable";
@@ -51,6 +52,21 @@ export default function App() {
   const [panel, setPanel] = useState<MobilePanel>("map");
   const [side, setSide] = useState<"areas" | "files">("areas");
 
+  // The activity window: chosen from the repository's own activity until the
+  // reader picks one, and then it is theirs and survives moving between repos.
+  const savedRange = localStorage.getItem("qc.activityRange");
+  const [activityRange, setActivityRange] = useState<number>(() =>
+    savedRange !== null && Number.isFinite(Number(savedRange)) ? Number(savedRange) : DEFAULT_RANGE_DAYS,
+  );
+  // A ref rather than state: adopt() runs inside a promise and would otherwise
+  // close over a stale value.
+  const rangePinned = useRef(savedRange !== null);
+  const chooseRange = (days: number) => {
+    rangePinned.current = true;
+    setActivityRange(days);
+    localStorage.setItem("qc.activityRange", String(days));
+  };
+
   const { ref: mapRef, width: mapWidth } = useElementSize();
 
   useEffect(() => {
@@ -80,6 +96,9 @@ export default function App() {
     setData(d);
     setStatus(null);
     setHalfLife(defaultHalfLife(d.meta.firstCommit, d.meta.lastCommit));
+    if (!rangePinned.current) {
+      setActivityRange(defaultRangeFor(d.timeline, Date.now() / 1000));
+    }
   };
 
   useEffect(() => {
@@ -434,6 +453,8 @@ export default function App() {
         halfLifeDays={halfLifeDays}
         scheme={scheme}
         height={isMobile ? 84 : 104}
+        rangeDays={activityRange}
+        onRangeChange={chooseRange}
       />
     </Paper>
   );

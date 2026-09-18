@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { Box, Group, Text } from "@mantine/core";
+import { Box, Group, SegmentedControl, Text } from "@mantine/core";
 import type { DayStat } from "../lib/api";
 import { formatCompact, heatAt, heatColor } from "../lib/heat";
+import { bucketOf, buildBins, describeBins, RANGES, totalCommits } from "../lib/timeline";
 
 interface Props {
   timeline: DayStat[];
@@ -9,36 +10,63 @@ interface Props {
   halfLifeDays: number;
   scheme: "dark" | "light";
   height?: number;
-}
-
-interface Bin {
-  start: number;
-  end: number;
-  label: string;
-  commits: number;
-  added: number;
-  removed: number;
+  rangeDays: number;
+  onRangeChange: (days: number) => void;
 }
 
 /**
- * Commit activity over the repository's life.
+ * Commit activity over a window.
  *
- * Bars are counts and wear the heat ramp at their own position in time, so the
- * timeline and the map are read with one key. Empty days are kept as zero-height
- * bars rather than dropped — a gap in activity is information, and a compressed
- * axis would hide it.
+ * The window is 90 days by default rather than the repository's whole life.
+ * Whole-life was the wrong default twice over: twelve years of weekly bars is a
+ * two-pixel hairline each, and scaling against the tallest bar in all of history
+ * flattens every recent month to nothing. It is also the wrong *question* —
+ * "what is moving now" is what this panel is next to, and a decade of context
+ * answers it worse than a quarter does.
+ *
+ * Ninety days rather than thirty because thirty is too short to compare against:
+ * a project with two commits a month renders nearly empty and reads as dead
+ * rather than quiet. Thirty is one click away for anyone who wants it, as is the
+ * full history.
+ *
+ * Bars wear the heat ramp at their own position in time, so the timeline and the
+ * map are read with one key. Empty periods are kept as floor-height bars rather
+ * than dropped: a gap in activity is information.
  */
-export default function ActivityChart({ timeline, now, halfLifeDays, scheme, height = 104 }: Props) {
+export default function ActivityChart({
+  timeline, now, halfLifeDays, scheme, height = 104, rangeDays, onRangeChange,
+}: Props) {
   const [hover, setHover] = useState<number | null>(null);
 
-  const bins = useMemo(() => buildBins(timeline), [timeline]);
+  const bins = useMemo(() => buildBins(timeline, now, rangeDays), [timeline, now, rangeDays]);
+  // Scaled within the window, so the bars answer "how does this week compare
+  // with the rest of the quarter" rather than "with the busiest week of 2014".
   const max = Math.max(1, ...bins.map((b) => b.commits));
+  const total = totalCommits(bins);
+
+  const header = (
+    <Group justify="space-between" align="center" mb={6} wrap="nowrap" gap="xs">
+      <Text size="xs" c="dimmed" fw={600} style={{ whiteSpace: "nowrap" }}>
+        Commits over time
+      </Text>
+      <SegmentedControl
+        size="xs"
+        value={String(rangeDays)}
+        onChange={(v) => onRangeChange(Number(v))}
+        data={RANGES.map((r) => ({ value: String(r.days), label: r.label }))}
+        styles={{ root: { background: "transparent" }, label: { padding: "1px 7px", fontSize: 10 } }}
+      />
+    </Group>
+  );
 
   if (bins.length === 0) {
     return (
-      <Text size="sm" c="dimmed">
-        No commit history.
-      </Text>
+      <Box pos="relative">
+        {header}
+        <Text size="sm" c="dimmed">
+          No commit history.
+        </Text>
+      </Box>
     );
   }
 
@@ -49,14 +77,13 @@ export default function ActivityChart({ timeline, now, halfLifeDays, scheme, hei
 
   return (
     <Box pos="relative">
-      <Group justify="space-between" align="flex-end" mb={6} wrap="nowrap">
-        <Text size="xs" c="dimmed" fw={600}>
-          Commits over time
-        </Text>
+      {header}
+
+      <Group justify="space-between" align="flex-end" mb={4} wrap="nowrap">
         <Text size="10px" c="dimmed" style={{ fontVariantNumeric: "tabular-nums", minHeight: 14 }}>
           {active
             ? `${active.label} · ${active.commits} commit${active.commits === 1 ? "" : "s"} · +${formatCompact(active.added)} / −${formatCompact(active.removed)}`
-            : `${bins.length} ${bins[0].end - bins[0].start > 86400 * 2 ? "weeks" : "days"}`}
+            : `${formatCompact(total)} commit${total === 1 ? "" : "s"} · ${describeBins(bins, bucketOf(bins))}`}
         </Text>
       </Group>
 
@@ -100,56 +127,6 @@ export default function ActivityChart({ timeline, now, halfLifeDays, scheme, hei
           {bins[bins.length - 1].label}
         </Text>
       </Group>
-
     </Box>
   );
-}
-
-/** Fill missing days, then roll up to weeks once a daily axis would be unreadable. */
-function buildBins(timeline: DayStat[]): Bin[] {
-  if (timeline.length === 0) return [];
-  const byDate = new Map(timeline.map((d) => [d.d, d]));
-  const start = parseDay(timeline[0].d);
-  const end = parseDay(timeline[timeline.length - 1].d);
-  const days: Bin[] = [];
-  for (let t = start; t <= end; t += 86400) {
-    const key = dayKey(t);
-    const d = byDate.get(key);
-    days.push({
-      start: t,
-      end: t + 86400,
-      label: shortDate(t),
-      commits: d?.c ?? 0,
-      added: d?.a ?? 0,
-      removed: d?.r ?? 0,
-    });
-  }
-  if (days.length <= 92) return days;
-
-  const weeks: Bin[] = [];
-  for (let i = 0; i < days.length; i += 7) {
-    const chunk = days.slice(i, i + 7);
-    weeks.push({
-      start: chunk[0].start,
-      end: chunk[chunk.length - 1].end,
-      label: `week of ${shortDate(chunk[0].start)}`,
-      commits: chunk.reduce((s, c) => s + c.commits, 0),
-      added: chunk.reduce((s, c) => s + c.added, 0),
-      removed: chunk.reduce((s, c) => s + c.removed, 0),
-    });
-  }
-  return weeks;
-}
-
-function parseDay(s: string): number {
-  const [y, m, d] = s.split("-").map(Number);
-  return Date.UTC(y, m - 1, d) / 1000;
-}
-
-function dayKey(t: number): string {
-  return new Date(t * 1000).toISOString().slice(0, 10);
-}
-
-function shortDate(t: number): string {
-  return new Date(t * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }
