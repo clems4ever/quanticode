@@ -217,14 +217,14 @@ export default function FileViewer({
           onScrollPositionChange={(p) => setScrollTop(p.y)}
           type="auto"
           scrollbarSize={10}
-          // On desktop the minimap beside this *is* the vertical scrollbar: it
-          // shows the viewport, jumps on click and scrubs on drag. Drawing a
-          // second bar next to it says the same thing twice. Long lines still
-          // need the horizontal one. On mobile there is no minimap, so the
-          // vertical bar comes back.
-          scrollbars={isMobile ? "xy" : "x"}
           style={{ flex: 1, minWidth: 0 }}
-          className="gh-scroll"
+          // On desktop the heat strip beside this *is* the vertical scrollbar —
+          // it shows the viewport, jumps on click and scrubs on drag — so the
+          // second bar is hidden in CSS. It must be hidden in CSS and not with
+          // Mantine's `scrollbars` prop: that prop sets overflow-y to hidden,
+          // which does not hide a scrollbar so much as stop the pane scrolling
+          // at all. On mobile there is no strip, so the bar stays.
+          className={isMobile ? "gh-scroll" : "gh-scroll gh-code-scroll"}
         >
           <Box
             className="gh-code"
@@ -269,6 +269,7 @@ export default function FileViewer({
           <Tooltip label="Whole-file heat — click or drag to move" position="left">
             <Box
               w={16}
+              className="gh-code-minimap"
               style={{
                 flexShrink: 0,
                 cursor: "pointer",

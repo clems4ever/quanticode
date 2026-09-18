@@ -162,3 +162,16 @@ body {
   --gh-mark-2: #a795bb;
   --gh-mark-3: #dcdfe9;
 }
+
+/*
+ * The file view's vertical scrollbar.
+ *
+ * Hidden rather than disabled. The heat strip down the right edge already shows
+ * where the viewport is, jumps on click and scrubs on drag, so a second bar
+ * beside it says the same thing twice — but the pane still has to scroll, by
+ * wheel, by trackpad, by keyboard and by that strip. Reaching for Mantine's
+ * `scrollbars="x"` instead sets overflow-y to hidden and freezes the file.
+ */
+.gh-code-scroll .mantine-ScrollArea-scrollbar[data-orientation="vertical"] {
+  display: none;
+}

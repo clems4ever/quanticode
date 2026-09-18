@@ -23,19 +23,37 @@ something, there must be a second route to the same information — the treemap
 hover card has its commit repeated on every row of the rankings for exactly this
 reason.
 
-Before pushing a UI change, look at it on both:
+There are two tools for this, and they answer different questions.
+
+**`npm run test:ui`** drives a real browser against a real instance at a desktop
+and a phone viewport, and runs in CI. It exists because of a specific bug: the
+file view's redundant vertical scrollbar was hidden with Mantine's
+`scrollbars="x"`, which also sets `overflow-y: hidden`, so source files could not
+be scrolled at all. Types passed, lint passed, 110 unit tests passed, and a
+screenshot of the first forty lines looked perfect. Only moving the wheel showed
+it.
 
 ```sh
-make build
-./quanticode -addr :8099 -web web/dist -cache /tmp/qc-cache &
+go build -o quanticode ./cmd/quanticode
+cd web && npm run build && npm run test:ui
+```
+
+The instance it drives serves *this repository* — no network, no clone, and a
+history every checkout has. Add a case here whenever a change adds something a
+reader has to be able to *do*, not merely see.
+
+**`npm run shots`** writes desktop, phone and light-mode screenshots to
+`/tmp/quanticode-shots/` and exits non-zero on a console error. It asserts
+nothing about pixels on purpose — a heat map's colours depend on today's date,
+so a pixel assertion would fail every morning — so it is for looking, and the
+judgement stays yours.
+
+```sh
 cd web && npm run shots -- http://127.0.0.1:8099/github.com/gin-gonic/gin
 ```
 
-That writes desktop, phone and light-mode screenshots to
-`/tmp/quanticode-shots/` and exits non-zero on any console error. Look at the
-images. The script asserts nothing about pixels on purpose — a heat map's
-colours depend on today's date, so a pixel assertion would fail every morning —
-so the judgement is still yours.
+Screenshots alone are not enough, and the scrollbar bug is the proof: the
+picture was correct and the pane was frozen.
 
 ## The invariants worth protecting
 
@@ -83,6 +101,7 @@ internal/heat/      the blame sweep and the per-file aggregates (the heat lens)
 internal/server/    HTTP API, gzip, static hosting of the SPA
 internal/testrepo/  builds throwaway git repos for the tests
 web/                React + TypeScript + Mantine, Vite, Vitest
+web/tests/          browser tests (Playwright), desktop and phone
 web/scripts/        the screenshot check above
 ```
 
@@ -92,10 +111,13 @@ web/scripts/        the screenshot check above
 times and assert against actual blame output. Blame's line attribution is what
 the whole app rests on; mocking it would test nothing. Keep it that way.
 
-**Pure logic lives in `web/src/lib/` and is tested there.** Components are
-verified by looking at them. If a piece of a component is worth asserting on,
-move it into `lib/` first — that is how `heat`, `tree`, `stats`, `timeline` and
-`source` ended up there.
+**Pure logic lives in `web/src/lib/` and is tested there** with Vitest. If a
+piece of a component is worth asserting on, move it into `lib/` first — that is
+how `heat`, `tree`, `stats`, `timeline` and `source` ended up there.
+
+**What a component *does* is tested in `web/tests/`** with a browser. The split
+is between a value and a behaviour: whether a half-life is calibrated correctly
+is a unit test, whether the pane it colours can be scrolled is not.
 
 **Payload keys are short** (`p`, `l`, `k`, `le`, `lc`) because one ships per file
 and a large repository has thousands. Comment the meaning in the Go struct and
