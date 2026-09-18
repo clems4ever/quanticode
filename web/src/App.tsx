@@ -15,7 +15,7 @@ import {
 import { pathForSource, sourceFromPath } from "./lib/source";
 import { buildTree, findNode, pathChain, type TreeNode } from "./lib/tree";
 import { formatCompact, formatNumber, relativeTime, type HeatMetric } from "./lib/heat";
-import { computeStats, defaultHalfLife, HALF_LIFE_PRESETS } from "./lib/stats";
+import { calibrateHalfLife, computeStats, HALF_LIFE_PRESETS, hotShare } from "./lib/stats";
 import { DEFAULT_RANGE_DAYS, defaultRangeFor } from "./lib/timeline";
 import Treemap from "./components/Treemap";
 import AreaRanking from "./components/AreaRanking";
@@ -44,6 +44,9 @@ export default function App() {
   const [attempt, setAttempt] = useState(0);
 
   const [halfLife, setHalfLife] = useState<string>("3");
+  // Whether the half-life on screen was calibrated for this repository or
+  // chosen by hand. It is preselected, so it has to say so.
+  const [halfLifeAuto, setHalfLifeAuto] = useState(true);
   const [metric, setMetric] = useState<HeatMetric>("average");
   const [showGenerated, setShowGenerated] = useState(false);
   const [query, setQuery] = useState("");
@@ -95,7 +98,12 @@ export default function App() {
   const adopt = (d: RepoPayload) => {
     setData(d);
     setStatus(null);
-    setHalfLife(defaultHalfLife(d.meta.firstCommit, d.meta.lastCommit));
+    // Calibrated per repository: the half-life is measured against a project's
+    // own pace, so one value cannot serve authelia and a repo started today.
+    // Generated files are excluded because they are hidden by default and would
+    // otherwise drag the measurement around.
+    setHalfLife(calibrateHalfLife(d.files.filter((f) => !f.g), Date.now() / 1000));
+    setHalfLifeAuto(true);
     if (!rangePinned.current) {
       setActivityRange(defaultRangeFor(d.timeline, Date.now() / 1000));
     }
@@ -184,6 +192,17 @@ export default function App() {
 
   const zoomed = useMemo(() => (tree ? findNode(tree, zoom) ?? tree : null), [tree, zoom]);
   const crumbs = useMemo(() => (tree ? pathChain(tree, zoomed?.path ?? "") : []), [tree, zoomed]);
+  // What the calibration is actually looking at, shown in the tooltip so the
+  // preselected value can be checked rather than taken on faith. Must sit with
+  // the other hooks: everything below here can return early.
+  const hotHere = useMemo(() => hotShare(files, now, halfLifeDays), [files, now, halfLifeDays]);
+
+  const resetHalfLife = () => {
+    if (!data) return;
+    setHalfLife(calibrateHalfLife(data.files.filter((f) => !f.g), Date.now() / 1000));
+    setHalfLifeAuto(true);
+  };
+
   const stats = useMemo(
     () => computeStats(files, now, halfLifeDays, metric),
     [files, now, halfLifeDays, metric],
@@ -272,16 +291,53 @@ export default function App() {
     <Paper p={{ base: "sm", sm: "md" }} radius="lg">
       <Group gap="md" wrap="wrap" align="flex-end">
         <Box>
-          <Text size="10px" c="dimmed" fw={650} tt="uppercase" lts="0.06em" mb={5}>
-            Half-life
-          </Text>
+          <Group gap={6} mb={5} align="center" wrap="nowrap">
+            <Text size="10px" c="dimmed" fw={650} tt="uppercase" lts="0.06em">
+              Half-life
+            </Text>
+            {halfLifeAuto ? (
+              <Tooltip
+                multiline
+                w={270}
+                withArrow
+                label={`Calibrated for this repository: the shortest half-life at which about a sixth of the code still reads hot (${Math.round(hotHere * 100)}% here). A longer one washes the map to the hot end; a shorter one goes dark.`}
+              >
+                <Badge
+                  size="xs"
+                  variant="light"
+                  color="gray"
+                  radius="sm"
+                  style={{ cursor: "help", textTransform: "none" }}
+                >
+                  auto
+                </Badge>
+              </Tooltip>
+            ) : (
+              <Tooltip withArrow label="Back to the value calibrated for this repository">
+                <Badge
+                  size="xs"
+                  variant="outline"
+                  color="gray"
+                  radius="sm"
+                  onClick={resetHalfLife}
+                  style={{ cursor: "pointer", textTransform: "none" }}
+                >
+                  reset
+                </Badge>
+              </Tooltip>
+            )}
+          </Group>
           <Select
             size="xs"
             w={124}
             radius="md"
             data={HALF_LIFE_PRESETS}
             value={halfLife}
-            onChange={(v) => v && setHalfLife(v)}
+            onChange={(v) => {
+              if (!v) return;
+              setHalfLife(v);
+              setHalfLifeAuto(false);
+            }}
             allowDeselect={false}
             comboboxProps={{ withinPortal: true }}
             aria-label="Heat half-life"

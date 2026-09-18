@@ -115,8 +115,38 @@ A line edited right now is `1.0`; one edited a half-life ago is `0.5`; two
 half-lives ago `0.25`. The **half-life** is the one knob the reader turns — it
 sets what "recent" is being measured against. A week answers "what is this
 sprint touching"; a quarter answers "which parts of the architecture are still
-moving". It defaults to roughly a sixth of the repository's own history, so the
-colour scale is spent on the range that repo actually spans.
+moving".
+
+### It is calibrated per repository
+
+A half-life is measured against a project's own pace, so no fixed value works.
+A year on authelia/authelia paints 29% of the map hot and the whole thing reads
+yellow with no cold background to contrast against; a month paints 12% and it
+goes dark. Three months lands on 15% and the structure appears.
+
+Deriving it from the repository's *span* — which is what this used to do — is
+the wrong input: authelia and gin-gonic/gin are both about a decade old and want
+very different half-lives, because what differs is how recently the code was
+last touched, not how long the project has existed.
+
+So quanticode measures the thing that matters: it walks the presets from
+shortest to longest and takes **the first at which at least a sixth of the code
+still reads hot**. Both ends fall out correctly — a repository committed to
+today is hot at every scale and gets the shortest, which is the only one that
+separates this morning from last night; a dormant repository never reaches the
+target and gets the longest, which is the only scale that shows anything at all.
+
+| repository | calibrated | share reading hot |
+| --- | --- | --- |
+| clems4ever/quanticode | 12 hours | 100% |
+| authelia/authelia | 3 months | 15% |
+| charmbracelet/bubbletea | 1 year | 15% |
+| gin-gonic/gin | 1 year | 3% |
+| sindresorhus/slugify | 1 year | 0% (dormant) |
+
+Because the value is preselected, the control says so: an **auto** badge sits
+next to it, and its tooltip gives the figure the calibration was working from.
+Choosing a half-life by hand replaces the badge with **reset**.
 
 A file's heat is the line-weighted mean of its lines' heat (**Every line**), so
 a 500-line file where one line changed yesterday is correctly cold. Switch to
